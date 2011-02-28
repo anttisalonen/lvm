@@ -9,10 +9,10 @@ $(BINDIR):
 	mkdir -p $(BINDIR)
 
 stack: $(BINDIR)
-	$(CC) $(CFLAGS) -o $(BINDIR)/$@ $(SRCDIR)/stack.c
+	$(CC) $(CFLAGS) -o $(BINDIR)/$@ $(SRCDIR)/stacklib.c $(SRCDIR)/stack.c
 
 stack-gen: $(BINDIR)
-	$(CC) $(CFLAGS) -o $(BINDIR)/$@ $(SRCDIR)/stack-gen.c
+	$(CC) $(CFLAGS) -o $(BINDIR)/$@ $(SRCDIR)/stacklib.c $(SRCDIR)/stack-gen.c
 
 clean:
 	rm -rf $(BINDIR)

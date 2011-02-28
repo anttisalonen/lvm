@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "stack.h"
+#include "stacklib.h"
 
 long int getnum(const char *buf, int *succ)
 {
@@ -36,23 +37,75 @@ void int_to_be(long int val, char *buf)
 	}
 }
 
+static int interactive;
+static char interactive_buffer[1024];
+static int interactive_bufferpos = 0;
+
+void output_char(char ch)
+{
+	if(interactive) {
+		if(interactive_bufferpos > 1000) {
+			fprintf(stdout, "Buffer full\n");
+			return;
+		}
+		interactive_bufferpos += sprintf(interactive_buffer + interactive_bufferpos,
+				"%c", ch);
+	}
+	else {
+		fprintf(stdout, "%c", ch);
+	}
+}
+
 void output_num(char opcode, long int num)
 {
 	char buf[4];
-	fprintf(stdout, "%c", opcode);
+	output_char(opcode);
 	int_to_be(num, buf);
 	int i;
-	for(i = 0; i < 4; i++)
-		fprintf(stdout, "%c", buf[i]);
+	for(i = 0; i < 4; i++) {
+		output_char(buf[i]);
+	}
+}
+
+void output(char opcode)
+{
+	output_char(opcode);
 }
 
 int main(int argc, char **argv)
 {
 	char buf[1024];
 	int fundef = 0;
-	while(fgets(buf, 1024, stdin)) {
+	interactive = argc > 1 && !strncmp(argv[1], "-i", 2);
+	while(1) {
+		int emptyline;
+		if(interactive) {
+			printf(">>> ");
+			fflush(stdout);
+		}
+		emptyline = (fgets(buf, 1024, stdin) == NULL);
+		if(!interactive && emptyline)
+			break;
 		if(!strncmp(buf, "ADD", 3)) {
-			fprintf(stdout, "%c", OPCODE_ADD);
+			output(OPCODE_ADD);
+		}
+		else if(!strncmp(buf, "BR ", 3)) {
+			int succ;
+			long int parsed_num = getnum(buf + 3, &succ);
+			if(!succ)
+				fprintf(stderr, "?\n");
+			else {
+				output_num(OPCODE_BRANCH, parsed_num);
+			}
+		}
+		else if(!strncmp(buf, "BRNZ ", 5)) {
+			int succ;
+			long int parsed_num = getnum(buf + 5, &succ);
+			if(!succ)
+				fprintf(stderr, "?\n");
+			else {
+				output_num(OPCODE_BRANCHNZ, parsed_num);
+			}
 		}
 		else if(!strncmp(buf, "FUNCALL ", 8)) {
 			int succ;
@@ -81,10 +134,14 @@ int main(int argc, char **argv)
 		else if(!strncmp(buf, "FUNEND", 6)) {
 			if(fundef) {
 				fundef = 0;
-				fprintf(stdout, "%c", OPCODE_DEFUN_END);
+				output(OPCODE_DEFUN_END);
 			}
 			else
 				fprintf(stderr, "?\n");
+		}
+		else if(interactive && !strncmp(buf, "run", 3)) {
+			parse_buffer(interactive_buffer,
+					interactive_bufferpos);
 		}
 		else {
 			int succ;

@@ -6,6 +6,8 @@
 #define OPCODE_DEFUN_START	0x30
 #define OPCODE_DEFUN_END	0x31
 #define OPCODE_CALLFUN		0x32
+#define OPCODE_BRANCH           0x33
+#define OPCODE_BRANCHNZ         0x34
 
 #endif
 
