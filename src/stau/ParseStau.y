@@ -19,6 +19,8 @@ import Stau
 %left if
 %left then
 %left else
+%left AP
+%left VAR
 
 %token 
       var             { TokenVar $$ }
@@ -42,8 +44,12 @@ Functions : Functions '\n' Function { $3 : $1 }
           | Function                { [$1] }
           | {- empty -}             { [] }
 
+Vars :: { [String] }
+Vars : var Vars { $1 : $2 }
+     | var      { [$1] }
+
 Function :: { Function }
-Function : var '=' Exp { Function $1 $3 }
+Function : Vars '=' Exp { Function (head $1) (tail $1) $3 }
 
 Exp :: { Exp }
 Exp  : Exp '+' Exp           { Plus $1 $3 }
@@ -51,14 +57,15 @@ Exp  : Exp '+' Exp           { Plus $1 $3 }
      | Exp '*' Exp           { Times $1 $3 }
      | Exp '/' Exp           { Div $1 $3 }
      | int                   { Int $1 }
-     | var                   { Var $1 }
+     | var %prec VAR         { Var $1 }
+     | var Exp %prec AP      { FunApp $1 $2 }
      | '(' Exp ')'           { Brack $2 }
      | '-' Exp %prec NEG     { Negate $2 }
      | if Exp then Exp else Exp { IfThenElse $2 $4 $6 }
 {
 
 parseError :: [Token] -> Either String a
-parseError _ = Left "Parse error"
+parseError ts = Left $ "Parse error: " ++ show (ts)
 
 isEndline :: Char -> Bool
 isEndline '\n' = True

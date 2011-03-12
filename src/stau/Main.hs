@@ -3,12 +3,15 @@ where
 
 import Data.List
 import qualified Data.Map as M
+import Control.Arrow
+import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error()
 import System.Exit
 import System.Environment
 import System.Console.GetOpt
+import Debug.Trace
 
 import ParseStau
 import Stau
@@ -16,15 +19,17 @@ import Stau
 data Options = Options
   {
     outputfile        :: FilePath
+  , showAST           :: Bool
   }
   deriving (Show)
 
 defaultOptions :: Options
-defaultOptions = Options ""
+defaultOptions = Options "" False
 
 options :: [OptDescr (Options -> Options)]
 options = [
     Option ['o'] []                (ReqArg (\l o -> o{outputfile = l}) "output file")   "output file"
+  , Option ['a'] []                (NoArg  (\o -> o{showAST = True}))                   "show AST"
   ]
 
 main :: IO ()
@@ -40,10 +45,16 @@ main = do
     let ifile = head nonopts
         ofile = outputfile opts
     input <- readFile ifile
+    when (showAST opts) $ do
+      case getAST input of
+        Right ast -> putStrLn ast >> exitWith ExitSuccess
+        Left  err -> putStrLn err >> exitWith (ExitFailure 1)
     case compile input of
       Right res -> writeFile ofile res
-      Left err  -> putStrLn err
+      Left err  -> putStrLn err >> exitWith (ExitFailure 1)
 
+getAST :: String -> Either String String
+getAST s = stauLexer s >>= parseStau >>= return . concatMap show
 compile :: String -> Either String String
 compile s = stauLexer s >>= parseStau >>= return . concatMap show . generateAssembly
 
@@ -52,6 +63,9 @@ data Opcode = OpInt Int
             | OpSub
             | OpMul
             | OpDiv
+            | OpDup
+            | OpNop
+            | OpDrop
             | OpFunDef Int
             | OpFunEnd
             | OpFunCall Int
@@ -67,6 +81,9 @@ instance Show Opcode where
   show OpSub         = addLF $ "SUB"
   show OpMul         = addLF $ "MUL"
   show OpDiv         = addLF $ "DIV"
+  show OpNop         = addLF $ "NOP"
+  show OpDup         = addLF $ "DUP"
+  show OpDrop        = addLF $ "DROP"
   show (OpFunDef i)  = addLF $ "FUNDEF " ++ show i
   show OpFunEnd      = addLF $ "FUNEND"
   show (OpFunCall i) = addLF $ "FUNCALL " ++ show i
@@ -74,19 +91,25 @@ instance Show Opcode where
   show (OpBrNz i)    = addLF $ "BRNZ " ++ show i
 
 generateAssembly :: [Function] -> [Opcode]
-generateAssembly fns = evalState (generateAssembly' fns) 0
+generateAssembly fns = evalState (generateAssembly' fns) (0, 0)
 
-generateAssembly' :: [Function] -> State Int [Opcode]
+generateAssembly' :: [Function] -> State CompileState [Opcode]
 generateAssembly' fns = 
   let fm = createFunctionMap fns
   in concat `liftM` forM fns (genFunctionAsm fm)
 
-genFunctionAsm :: M.Map String Int -> Function -> State Int [Opcode]
+type FunctionMap = M.Map String Int
+
+type CompileState = (Int, Int)
+
+genFunctionAsm :: FunctionMap -> Function -> State CompileState [Opcode]
 genFunctionAsm fm f = do
+  modify $ second $ const $ length $ getFunArgs f
   fd <- addOp $ OpFunDef (fm M.! getFunName f)
-  fds <- genExprAsm (getFunExp f)
+  fds <- genExprAsm fm (getFunExp f)
   fe <- addOp $ OpFunEnd
-  return $ fd : fds ++ [fe]
+  drops <- addDrops
+  return $ fd : fds ++ drops ++ [fe]
 
 manyOps :: (Monad m) => [m [a]] -> m [a]
 manyOps []     = return []
@@ -95,29 +118,66 @@ manyOps (n:ns) = do
   ps <- manyOps ns
   return $ concat [p,ps]
 
-genExprAsm :: Exp -> State Int [Opcode]
-genExprAsm (Plus e1 e2)  = manyOps [genExprAsm e1, genExprAsm e2, sequence [addOp OpAdd]]
-genExprAsm (Minus e1 e2) = manyOps [genExprAsm e1, genExprAsm e2, sequence [addOp OpSub]]
-genExprAsm (Times e1 e2) = manyOps [genExprAsm e1, genExprAsm e2, sequence [addOp OpMul]]
-genExprAsm (Div e1 e2)   = manyOps [genExprAsm e1, genExprAsm e2, sequence [addOp OpDiv]]
-genExprAsm (Int i)       = sequence [addOp $ OpInt i]
-genExprAsm (Brack e)     = genExprAsm e
-genExprAsm (IfThenElse e1 e2 e3) = do
-  o1 <- genExprAsm e1
+genArithAsm :: FunctionMap -> Opcode -> Exp -> Exp -> State CompileState [Opcode]
+genArithAsm fm op e1 e2 = do
+  a1 <- genExprAsm fm e1
+  a2 <- genExprAsm fm e2
+  rmVar
+  opc <- addOp op
+  return $ a1 ++ a2 ++ [opc]
+
+genExprAsm :: FunctionMap -> Exp -> State CompileState [Opcode]
+genExprAsm fm (Plus e1 e2)  = genArithAsm fm OpAdd e1 e2
+genExprAsm fm (Minus e1 e2) = genArithAsm fm OpSub e1 e2
+genExprAsm fm (Times e1 e2) = genArithAsm fm OpMul e1 e2
+genExprAsm fm (Div e1 e2)   = genArithAsm fm OpDiv e1 e2
+genExprAsm _  (Int i)       = addVar >> sequence [addOp $ OpInt i]
+genExprAsm fm (Brack e)     = genExprAsm fm e
+
+genExprAsm fm (IfThenElse e1 e2 e3) = do
+  o1 <- genExprAsm fm e1
+  rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
-  thenBr <- genExprAsm e3
+  elseBr <- genExprAsm fm e3
+  elseDrops <- addDrops
   _  <- addOp $ OpBr 0   -- placeholder
-  l2 <- get
-  elseBr <- genExprAsm e2
-  l3 <- get
+  l2 <- fst <$> get
+  thenBr <- genExprAsm fm e2
+  thenDrops <- addDrops
+  l3 <- fst <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
-  return $ concat [o1, br1, elseBr, br2, thenBr]
-genExprAsm e            = error $ "Expression '" ++ show e ++ "' not supported yet"
+  return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
 
-addOp :: Opcode -> State Int Opcode
+genExprAsm fm (FunApp fn ep) = do
+  param <- genExprAsm fm ep
+  fcall <- case M.lookup fn fm of
+             Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
+             Just i  -> addOp (OpFunCall i)
+  return $ param ++ [fcall]
+
+genExprAsm _  (Var _)      = do
+  numDrops <- snd <$> get
+  if trace (show numDrops) (numDrops <= 1)
+    then addVar >> sequence [addOp OpDup]
+    else return []
+
+genExprAsm _  e            = error $ "Expression '" ++ show e ++ "' not supported yet"
+
+addVar, rmVar :: State CompileState ()
+addVar = modify (second succ)
+rmVar  = modify (second pred)
+
+addDrops :: State CompileState [Opcode]
+addDrops = do
+  numDrops <- snd <$> get
+  drops <- forM [2..numDrops] $ \_ -> addOp OpDrop
+  modify $ second $ const 1
+  return drops
+
+addOp :: Opcode -> State CompileState Opcode
 addOp op = do
-  modify (+ (opLength op))
+  modify $ first (+ (opLength op))
   return op
 
 asmLength :: [Opcode] -> Int
@@ -129,6 +189,9 @@ opLength OpAdd         = 1
 opLength OpSub         = 1
 opLength OpMul         = 1
 opLength OpDiv         = 1
+opLength OpDup         = 1
+opLength OpDrop        = 1
+opLength OpNop         = 1
 opLength (OpFunDef _)  = 5
 opLength OpFunEnd      = 1
 opLength (OpFunCall _) = 5

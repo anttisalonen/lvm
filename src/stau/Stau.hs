@@ -1,7 +1,10 @@
 module Stau
 where
 
-data Function = Function { getFunName :: String, getFunExp :: Exp }
+data Function = Function { 
+  getFunName :: String,
+  getFunArgs :: [String],
+  getFunExp :: Exp }
       deriving Show
 
 data Exp
@@ -11,6 +14,7 @@ data Exp
       | Div Exp Exp 
       | Int Int 
       | Var String 
+      | FunApp String Exp
       | Brack Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp
