@@ -11,6 +11,9 @@
 #define OPCODE_CALLFUN		0x32
 #define OPCODE_BRANCH           0x33
 #define OPCODE_BRANCHNZ         0x34
+#define OPCODE_DUP		0x40
+#define OPCODE_DROP		0x41
+#define OPCODE_NOP		0x42
 
 #endif
 

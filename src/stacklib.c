@@ -4,6 +4,8 @@
 
 #include "stack.h"
 
+// #define DEBUG
+
 #ifdef DEBUG
 #define dprintf(...) \
 	fprintf(stderr, __VA_ARGS__)
@@ -16,6 +18,9 @@ enum opcode {
 	opcode_sub,
 	opcode_mul,
 	opcode_div,
+	opcode_dup,
+	opcode_drop,
+	opcode_nop,
 };
 
 enum valuetype {
@@ -59,15 +64,12 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 {
 	switch(buf[*pc]) {
 		case OPCODE_ADD:
-			(*pc)++;
-			return 0;
 		case OPCODE_SUB:
-			(*pc)++;
-			return 0;
 		case OPCODE_MUL:
-			(*pc)++;
-			return 0;
 		case OPCODE_DIV:
+		case OPCODE_DUP:
+		case OPCODE_DROP:
+		case OPCODE_NOP:
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -89,29 +91,40 @@ static int stackvalue_is_int(const stackvalue *sv)
 	return sv->vt == valuetype_int;
 }
 
+static enum opcode opcode_to_enum(int opcode)
+{
+	switch(opcode) {
+		case OPCODE_ADD:
+			return opcode_add;
+		case OPCODE_SUB:
+			return opcode_sub;
+		case OPCODE_MUL:
+			return opcode_mul;
+		case OPCODE_DIV:
+			return opcode_div;
+		case OPCODE_DUP:
+			return opcode_dup;
+		case OPCODE_DROP:
+			return opcode_drop;
+		default: // nop
+			return opcode_nop;
+	}
+}
+
 static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
 		int *interp, stackvalue *stack, int *sp)
 {
 	*interp = 1;
 	switch(buf[*pc]) {
 		case OPCODE_ADD:
-			sv->vt = valuetype_opcode;
-			sv->value.op = opcode_add;
-			(*pc)++;
-			return 0;
 		case OPCODE_SUB:
-			sv->vt = valuetype_opcode;
-			sv->value.op = opcode_sub;
-			(*pc)++;
-			return 0;
 		case OPCODE_MUL:
-			sv->vt = valuetype_opcode;
-			sv->value.op = opcode_mul;
-			(*pc)++;
-			return 0;
 		case OPCODE_DIV:
+		case OPCODE_DUP:
+		case OPCODE_DROP:
+		case OPCODE_NOP:
 			sv->vt = valuetype_opcode;
-			sv->value.op = opcode_div;
+			sv->value.op = opcode_to_enum(buf[*pc]);
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -148,7 +161,7 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 				return 1;
 			int32_t i1 = stack[*sp - 1].value.intvalue;
 			(*sp)--;
-			if(i1) {
+			if(!i1) {
 				(*pc) += 5;
 				return 0;
 			}
@@ -163,6 +176,8 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			(*pc) = sv->value.intvalue;
 			return 0;
 		default:
+			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
+					*pc, buf[*pc]);
 			return 1;
 	}
 }
@@ -187,8 +202,14 @@ static void print_stackvalue(const stackvalue *sv)
 				case opcode_div:
 					printf("DIV\n");
 					return;
-				default:
-					printf("<unknown opcode>\n");
+				case opcode_dup:
+					printf("DUP\n");
+					return;
+				case opcode_drop:
+					printf("DROP\n");
+					return;
+				case opcode_nop:
+					printf("NOP\n");
 					return;
 			}
 		default:
@@ -219,12 +240,19 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 				case opcode_sub:
 				case opcode_mul:
 				case opcode_div:
-					if(*sp < 2)
+					if(*sp < 2) {
+						fprintf(stderr, "arithmetic with %d elements in stack\n",
+								*sp);
 						return 1;
-					if(!stackvalue_is_int(&stack[*sp - 1]))
+					}
+					if(!stackvalue_is_int(&stack[*sp - 1])) {
+						fprintf(stderr, "arithmetic with no int\n");
 						return 1;
-					if(!stackvalue_is_int(&stack[*sp - 2]))
+					}
+					if(!stackvalue_is_int(&stack[*sp - 2])) {
+						fprintf(stderr, "arithmetic with no int\n");
 						return 1;
+					}
 					int32_t i1 = stack[*sp - 1].value.intvalue;
 					int32_t i2 = stack[*sp - 2].value.intvalue;
 					(*sp)--;
@@ -242,11 +270,33 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 							stack[*sp - 1].value.intvalue = i2 * i1;
 							dprintf("[%d] %d * %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
 							break;
-						case opcode_div:
+						default: // div
 							stack[*sp - 1].value.intvalue = i2 / i1;
 							dprintf("[%d] %d / %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
 							break;
 					}
+					return 0;
+				case opcode_dup:
+					if(*sp < 1) {
+						fprintf(stderr, "DUP with empty stack\n");
+						return 1;
+					}
+					stack[*sp] = stack[*sp - 1];
+#ifdef DEBUG
+					if(stackvalue_is_int(&stack[*sp])) {
+						dprintf("[%d] DUP %d\n", *sp, stack[*sp].value.intvalue);
+					}
+#endif
+					(*sp)++;
+					return 0;
+				case opcode_drop:
+					if(*sp < 1) {
+						fprintf(stderr, "DROP with empty stack\n");
+						return 1;
+					}
+					(*sp)--;
+					return 0;
+				case opcode_nop:
 					return 0;
 			}
 		default:
@@ -269,12 +319,12 @@ static int run_code(const char *buf, unsigned int bufsize)
 			return 1;
 		}
 		if(get_value(buf, &sv, &pc, bufsize, &interp, stack, &sp)) {
-			fprintf(stderr, "Invalid instruction\n");
+			fprintf(stderr, "Invalid instruction on value\n");
 			return 1;
 		}
 		if(interp) {
 			if(interpret(&sv, stack, &sp)) {
-				fprintf(stderr, "Invalid instruction\n");
+				fprintf(stderr, "Invalid instruction on interpret\n");
 				return 1;
 			}
 		}
