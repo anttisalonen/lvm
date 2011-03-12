@@ -45,7 +45,7 @@ main = do
     input <- readFile ifile
     when (showAST opts) $ do
       case getAST input of
-        Right ast -> putStrLn ast >> exitWith ExitSuccess
+        Right ast -> putStrLn ast
         Left  err -> putStrLn err >> exitWith (ExitFailure 1)
     case compile input of
       Right res -> writeFile ofile res
