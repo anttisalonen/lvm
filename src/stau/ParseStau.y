@@ -16,10 +16,16 @@ import Stau
 %left '+' '-'
 %left '*' '/'
 %left NEG
+%left if
+%left then
+%left else
 
 %token 
       var             { TokenVar $$ }
       int             { TokenInt $$ }
+      if              { TokenIf }
+      then            { TokenThen }
+      else            { TokenElse }
       '='             { TokenEq }
       '+'             { TokenPlus }
       '-'             { TokenMinus }
@@ -48,7 +54,7 @@ Exp  : Exp '+' Exp           { Plus $1 $3 }
      | var                   { Var $1 }
      | '(' Exp ')'           { Brack $2 }
      | '-' Exp %prec NEG     { Negate $2 }
-
+     | if Exp then Exp else Exp { IfThenElse $2 $4 $6 }
 {
 
 parseError :: [Token] -> Either String a
@@ -82,8 +88,13 @@ stauLexer (c:_) = Left $ "stauLexer says: Syntax error at '" ++ [c] ++ "'"
 lexNum cs = comb rest (TokenInt (read num))
       where (num,rest) = span isDigit cs
 
-lexVar cs = comb rest (TokenVar var)
-  where (var, rest) = span isAlpha cs
+lexVar cs = comb rest var
+  where (tok, rest) = span isAlpha cs
+        var         = case tok of
+                        "if"   -> TokenIf
+                        "then" -> TokenThen
+                        "else" -> TokenElse
+                        v      -> TokenVar v
 
 }
 

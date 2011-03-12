@@ -13,6 +13,7 @@ data Exp
       | Var String 
       | Brack Exp
       | Negate Exp
+      | IfThenElse Exp Exp Exp
       deriving Show
 
 data Token
@@ -23,6 +24,9 @@ data Token
       | TokenMinus
       | TokenTimes
       | TokenDiv
+      | TokenIf
+      | TokenThen
+      | TokenElse
       | TokenOB
       | TokenCB
       | TokenEndline
