@@ -1,0 +1,2 @@
+fac n = if n then n * (fac (n - 1)) else 1
+main = fac 12
