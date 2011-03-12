@@ -3,7 +3,6 @@ where
 
 import Data.List
 import qualified Data.Map as M
-import Control.Arrow
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State
@@ -11,7 +10,6 @@ import Control.Monad.Error()
 import System.Exit
 import System.Environment
 import System.Console.GetOpt
-import Debug.Trace
 
 import ParseStau
 import Stau
@@ -91,7 +89,7 @@ instance Show Opcode where
   show (OpBrNz i)    = addLF $ "BRNZ " ++ show i
 
 generateAssembly :: [Function] -> [Opcode]
-generateAssembly fns = evalState (generateAssembly' fns) (0, 0)
+generateAssembly fns = evalState (generateAssembly' fns) $ CompileState 0 0 0
 
 generateAssembly' :: [Function] -> State CompileState [Opcode]
 generateAssembly' fns = 
@@ -100,11 +98,16 @@ generateAssembly' fns =
 
 type FunctionMap = M.Map String Int
 
-type CompileState = (Int, Int)
+data CompileState = CompileState {
+    currPos :: Int
+  , numVars :: Int
+  , minVars :: Int
+  }
 
 genFunctionAsm :: FunctionMap -> Function -> State CompileState [Opcode]
 genFunctionAsm fm f = do
-  modify $ second $ const $ length $ getFunArgs f
+  let numArgs = length $ getFunArgs f
+  modify $ \c -> c{numVars = numArgs, minVars = numArgs}
   fd <- addOp $ OpFunDef (fm M.! getFunName f)
   fds <- genExprAsm fm (getFunExp f)
   fe <- addOp $ OpFunEnd
@@ -141,10 +144,10 @@ genExprAsm fm (IfThenElse e1 e2 e3) = do
   elseBr <- genExprAsm fm e3
   elseDrops <- addDrops
   _  <- addOp $ OpBr 0   -- placeholder
-  l2 <- fst <$> get
+  l2 <- currPos <$> get
   thenBr <- genExprAsm fm e2
   thenDrops <- addDrops
-  l3 <- fst <$> get
+  l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
   return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
@@ -157,27 +160,27 @@ genExprAsm fm (FunApp fn ep) = do
   return $ param ++ [fcall]
 
 genExprAsm _  (Var _)      = do
-  numDrops <- snd <$> get
-  if trace (show numDrops) (numDrops <= 1)
+  numDrops <- numVars <$> get
+  if numDrops <= 1
     then addVar >> sequence [addOp OpDup]
     else return []
 
 genExprAsm _  e            = error $ "Expression '" ++ show e ++ "' not supported yet"
 
 addVar, rmVar :: State CompileState ()
-addVar = modify (second succ)
-rmVar  = modify (second pred)
+addVar = modify $ \c -> c{numVars = succ (numVars c)}
+rmVar  = modify $ \c -> c{numVars = pred (numVars c)}
 
 addDrops :: State CompileState [Opcode]
 addDrops = do
-  numDrops <- snd <$> get
+  numDrops <- numVars <$> get
   drops <- forM [2..numDrops] $ \_ -> addOp OpDrop
-  modify $ second $ const 1
+  modify $ \c -> c{numVars = minVars c}
   return drops
 
 addOp :: Opcode -> State CompileState Opcode
 addOp op = do
-  modify $ first (+ (opLength op))
+  modify $ \c -> c{currPos = currPos c + opLength op}
   return op
 
 asmLength :: [Opcode] -> Int
