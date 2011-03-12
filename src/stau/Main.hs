@@ -48,6 +48,9 @@ compile s = stauLexer s >>= parseStau >>= return . concatMap show . generateAsse
 
 data Opcode = OpInt Int
             | OpAdd
+            | OpSub
+            | OpMul
+            | OpDiv
             | OpFunDef Int
             | OpFunEnd
             | OpFunCall Int
@@ -60,6 +63,9 @@ addLF = (++ "\n")
 instance Show Opcode where
   show (OpInt i)     = addLF $ show i
   show OpAdd         = addLF $ "ADD"
+  show OpSub         = addLF $ "SUB"
+  show OpMul         = addLF $ "MUL"
+  show OpDiv         = addLF $ "DIV"
   show (OpFunDef i)  = addLF $ "FUNDEF " ++ show i
   show OpFunEnd      = addLF $ "FUNEND"
   show (OpFunCall i) = addLF $ "FUNCALL " ++ show i
@@ -70,7 +76,10 @@ generateAssembly :: [Function] -> [Opcode]
 generateAssembly fns = 
   let fm = createFunctionMap fns
       generateAssembly' f = OpFunDef (fm M.! getFunName f) : genExprAsm (getFunExp f)
-      genExprAsm (Plus e1 e2) = reverse $ [OpAdd] ++ genExprAsm e2 ++ genExprAsm e1
+      genExprAsm (Plus e1 e2)  = genExprAsm e1 ++ genExprAsm e2 ++ [OpAdd]
+      genExprAsm (Minus e1 e2) = genExprAsm e1 ++ genExprAsm e2 ++ [OpSub]
+      genExprAsm (Times e1 e2) = genExprAsm e1 ++ genExprAsm e2 ++ [OpMul]
+      genExprAsm (Div e1 e2)   = genExprAsm e1 ++ genExprAsm e2 ++ [OpDiv]
       genExprAsm (Int i)      = [OpInt i]
       genExprAsm (Brack e)    = genExprAsm e
       genExprAsm e            = error $ "Expression '" ++ show e ++ "' not supported yet"

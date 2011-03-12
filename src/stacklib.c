@@ -4,8 +4,18 @@
 
 #include "stack.h"
 
+#ifdef DEBUG
+#define dprintf(...) \
+	fprintf(stderr, __VA_ARGS__)
+#else
+#define dprintf(...)
+#endif
+
 enum opcode {
 	opcode_add,
+	opcode_sub,
+	opcode_mul,
+	opcode_div,
 };
 
 enum valuetype {
@@ -51,6 +61,15 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_ADD:
 			(*pc)++;
 			return 0;
+		case OPCODE_SUB:
+			(*pc)++;
+			return 0;
+		case OPCODE_MUL:
+			(*pc)++;
+			return 0;
+		case OPCODE_DIV:
+			(*pc)++;
+			return 0;
 		case OPCODE_INT:
 		case OPCODE_CALLFUN:
 		case OPCODE_BRANCH:
@@ -78,6 +97,21 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 		case OPCODE_ADD:
 			sv->vt = valuetype_opcode;
 			sv->value.op = opcode_add;
+			(*pc)++;
+			return 0;
+		case OPCODE_SUB:
+			sv->vt = valuetype_opcode;
+			sv->value.op = opcode_sub;
+			(*pc)++;
+			return 0;
+		case OPCODE_MUL:
+			sv->vt = valuetype_opcode;
+			sv->value.op = opcode_mul;
+			(*pc)++;
+			return 0;
+		case OPCODE_DIV:
+			sv->vt = valuetype_opcode;
+			sv->value.op = opcode_div;
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -144,6 +178,18 @@ static void print_stackvalue(const stackvalue *sv)
 				case opcode_add:
 					printf("ADD\n");
 					return;
+				case opcode_sub:
+					printf("SUB\n");
+					return;
+				case opcode_mul:
+					printf("MUL\n");
+					return;
+				case opcode_div:
+					printf("DIV\n");
+					return;
+				default:
+					printf("<unknown opcode>\n");
+					return;
 			}
 		default:
 			printf("<unknown>\n");
@@ -170,6 +216,9 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 		case valuetype_opcode:
 			switch(sv->value.op) {
 				case opcode_add:
+				case opcode_sub:
+				case opcode_mul:
+				case opcode_div:
 					if(*sp < 2)
 						return 1;
 					if(!stackvalue_is_int(&stack[*sp - 1]))
@@ -180,8 +229,24 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 					int32_t i2 = stack[*sp - 2].value.intvalue;
 					(*sp)--;
 					stack[*sp - 1].vt = valuetype_int;
-					stack[*sp - 1].value.intvalue = i1 + i2;
-					// printf("[%d] %d + %d = %d\n", *sp, i1, i2, stack[*sp - 1].value.intvalue);
+					switch(sv->value.op) {
+						case opcode_add:
+							stack[*sp - 1].value.intvalue = i2 + i1;
+							dprintf("[%d] %d + %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_sub:
+							stack[*sp - 1].value.intvalue = i2 - i1;
+							dprintf("[%d] %d - %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_mul:
+							stack[*sp - 1].value.intvalue = i2 * i1;
+							dprintf("[%d] %d * %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_div:
+							stack[*sp - 1].value.intvalue = i2 / i1;
+							dprintf("[%d] %d / %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+					}
 					return 0;
 			}
 		default:

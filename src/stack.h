@@ -3,6 +3,9 @@
 
 #define OPCODE_INT		0x1f
 #define OPCODE_ADD		0x20
+#define OPCODE_SUB		0x21
+#define OPCODE_MUL		0x22
+#define OPCODE_DIV		0x23
 #define OPCODE_DEFUN_START	0x30
 #define OPCODE_DEFUN_END	0x31
 #define OPCODE_CALLFUN		0x32

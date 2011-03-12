@@ -89,6 +89,15 @@ int main(int argc, char **argv)
 		if(!strncmp(buf, "ADD", 3)) {
 			output(OPCODE_ADD);
 		}
+		else if(!strncmp(buf, "SUB", 3)) {
+			output(OPCODE_SUB);
+		}
+		else if(!strncmp(buf, "MUL", 3)) {
+			output(OPCODE_MUL);
+		}
+		else if(!strncmp(buf, "DIV", 3)) {
+			output(OPCODE_DIV);
+		}
 		else if(!strncmp(buf, "BR ", 3)) {
 			int succ;
 			long int parsed_num = getnum(buf + 3, &succ);
