@@ -52,12 +52,10 @@ static int return_points[MAX_CALL_DEPTH];
 static int get_int(const char *buf, int *pc, stackvalue *sv)
 {
 	sv->vt = valuetype_int;
-	sv->value.intvalue = 0;
 	sv->value.intvalue = (buf[*pc]) & 0x7f;
-	int i;
-	for(i = 1; i < 4; i++) {
-		sv->value.intvalue += (buf[*pc + i]) << (i * 8);
-	}
+	sv->value.intvalue += (buf[*pc + 1]) << 8;
+	sv->value.intvalue += (buf[*pc + 2]) << 16;
+	sv->value.intvalue += (buf[*pc + 3]) << 24;
 	if(buf[*pc] & 0x80)
 		sv->value.intvalue = -sv->value.intvalue;
 	(*pc) += 4;
@@ -259,6 +257,110 @@ static void print_stack(const stackvalue *stack, int sp)
 	}
 }
 
+static int interpret_arith_opcode(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	int32_t i1;
+	int32_t i2;
+	if(*sp < 2) {
+		fprintf(stderr, "arithmetic with %d elements in stack\n",
+				*sp);
+		return 1;
+	}
+	if(!stackvalue_is_int(&stack[*sp - 1])) {
+		fprintf(stderr, "arithmetic with no int\n");
+		return 1;
+	}
+	if(!stackvalue_is_int(&stack[*sp - 2])) {
+		fprintf(stderr, "arithmetic with no int\n");
+		return 1;
+	}
+	i1 = stack[*sp - 1].value.intvalue;
+	i2 = stack[*sp - 2].value.intvalue;
+	(*sp)--;
+	stack[*sp - 1].vt = valuetype_int;
+	switch(sv->value.op) {
+		case opcode_add:
+			stack[*sp - 1].value.intvalue = i2 + i1;
+			dprintf("[%d] %d + %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_sub:
+			stack[*sp - 1].value.intvalue = i2 - i1;
+			dprintf("[%d] %d - %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_mul:
+			stack[*sp - 1].value.intvalue = i2 * i1;
+			dprintf("[%d] %d * %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_div:
+			stack[*sp - 1].value.intvalue = i2 / i1;
+			dprintf("[%d] %d / %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_lt:
+			stack[*sp - 1].value.intvalue = i2 < i1;
+			dprintf("[%d] %d < %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_le:
+			stack[*sp - 1].value.intvalue = i2 <= i1;
+			dprintf("[%d] %d <= %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_eq:
+			stack[*sp - 1].value.intvalue = i2 == i1;
+			dprintf("[%d] %d == %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+			break;
+		case opcode_dup:
+		case opcode_drop:
+		case opcode_nop:
+		case opcode_swap:
+			break;
+	}
+	return 0;
+}
+
+static int interpret_dup(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 1) {
+		fprintf(stderr, "DUP with empty stack\n");
+		return 1;
+	}
+	stack[*sp] = stack[*sp - 1];
+#ifdef DEBUG
+	if(stackvalue_is_int(&stack[*sp])) {
+		dprintf("[%d] DUP %d\n", *sp, stack[*sp].value.intvalue);
+	}
+#endif
+	(*sp)++;
+	return 0;
+}
+
+static int interpret_drop(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 1) {
+		fprintf(stderr, "DROP with empty stack\n");
+		return 1;
+	}
+	(*sp)--;
+	return 0;
+}
+
+static int interpret_swap(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 2) {
+		fprintf(stderr, "SWAP with %d elements\n", *sp);
+		return 1;
+	}
+#ifdef DEBUG
+	if(stackvalue_is_int(&stack[*sp - 1]) && stackvalue_is_int(&stack[*sp - 2])) {
+		dprintf("[%d] SWAP %d %d\n", *sp,
+				stack[*sp - 1].value.intvalue,
+				stack[*sp - 2].value.intvalue);
+	}
+#endif
+	stackvalue tmp = stack[*sp - 1];
+	stack[*sp - 1] = stack[*sp - 2];
+	stack[*sp - 2] = tmp;
+	return 0;
+}
+
 static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 {
 	switch(sv->vt) {
@@ -275,97 +377,15 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 				case opcode_lt:
 				case opcode_le:
 				case opcode_eq:
-					if(*sp < 2) {
-						fprintf(stderr, "arithmetic with %d elements in stack\n",
-								*sp);
-						return 1;
-					}
-					if(!stackvalue_is_int(&stack[*sp - 1])) {
-						fprintf(stderr, "arithmetic with no int\n");
-						return 1;
-					}
-					if(!stackvalue_is_int(&stack[*sp - 2])) {
-						fprintf(stderr, "arithmetic with no int\n");
-						return 1;
-					}
-					int32_t i1 = stack[*sp - 1].value.intvalue;
-					int32_t i2 = stack[*sp - 2].value.intvalue;
-					(*sp)--;
-					stack[*sp - 1].vt = valuetype_int;
-					switch(sv->value.op) {
-						case opcode_add:
-							stack[*sp - 1].value.intvalue = i2 + i1;
-							dprintf("[%d] %d + %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_sub:
-							stack[*sp - 1].value.intvalue = i2 - i1;
-							dprintf("[%d] %d - %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_mul:
-							stack[*sp - 1].value.intvalue = i2 * i1;
-							dprintf("[%d] %d * %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_div:
-							stack[*sp - 1].value.intvalue = i2 / i1;
-							dprintf("[%d] %d / %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_lt:
-							stack[*sp - 1].value.intvalue = i2 < i1;
-							dprintf("[%d] %d < %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_le:
-							stack[*sp - 1].value.intvalue = i2 <= i1;
-							dprintf("[%d] %d <= %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_eq:
-							stack[*sp - 1].value.intvalue = i2 == i1;
-							dprintf("[%d] %d == %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
-							break;
-						case opcode_dup:
-						case opcode_drop:
-						case opcode_nop:
-						case opcode_swap:
-							break;
-					}
-					return 0;
+					return interpret_arith_opcode(sv, stack, sp);
 				case opcode_dup:
-					if(*sp < 1) {
-						fprintf(stderr, "DUP with empty stack\n");
-						return 1;
-					}
-					stack[*sp] = stack[*sp - 1];
-#ifdef DEBUG
-					if(stackvalue_is_int(&stack[*sp])) {
-						dprintf("[%d] DUP %d\n", *sp, stack[*sp].value.intvalue);
-					}
-#endif
-					(*sp)++;
-					return 0;
+					return interpret_dup(sv, stack, sp);
 				case opcode_drop:
-					if(*sp < 1) {
-						fprintf(stderr, "DROP with empty stack\n");
-						return 1;
-					}
-					(*sp)--;
-					return 0;
+					return interpret_drop(sv, stack, sp);
 				case opcode_nop:
 					return 0;
 				case opcode_swap:
-					if(*sp < 2) {
-						fprintf(stderr, "SWAP with %d elements\n", *sp);
-						return 1;
-					}
-#ifdef DEBUG
-					if(stackvalue_is_int(&stack[*sp - 1]) && stackvalue_is_int(&stack[*sp - 2])) {
-						dprintf("[%d] SWAP %d %d\n", *sp,
-								stack[*sp - 1].value.intvalue,
-								stack[*sp - 2].value.intvalue);
-					}
-#endif
-					stackvalue tmp = stack[*sp - 1];
-					stack[*sp - 1] = stack[*sp - 2];
-					stack[*sp - 2] = tmp;
-					return 0;
+					return interpret_swap(sv, stack, sp);
 			}
 		default:
 			return 1;
