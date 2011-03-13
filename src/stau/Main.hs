@@ -61,9 +61,13 @@ data Opcode = OpInt Int
             | OpSub
             | OpMul
             | OpDiv
+            | OpLT
+            | OpLE
+            | OpEQ
             | OpDup
             | OpNop
             | OpDrop
+            | OpSwap
             | OpFunDef Int
             | OpFunEnd
             | OpFunCall Int
@@ -79,9 +83,13 @@ instance Show Opcode where
   show OpSub         = addLF $ "SUB"
   show OpMul         = addLF $ "MUL"
   show OpDiv         = addLF $ "DIV"
+  show OpLT          = addLF $ "LT"
+  show OpLE          = addLF $ "LE"
+  show OpEQ          = addLF $ "EQ"
   show OpNop         = addLF $ "NOP"
   show OpDup         = addLF $ "DUP"
   show OpDrop        = addLF $ "DROP"
+  show OpSwap        = addLF $ "SWAP"
   show (OpFunDef i)  = addLF $ "FUNDEF " ++ show i
   show OpFunEnd      = addLF $ "FUNEND"
   show (OpFunCall i) = addLF $ "FUNCALL " ++ show i
@@ -156,8 +164,15 @@ genExprAsm fm (FunApp fn ep) = do
   param <- genExprAsm fm ep
   fcall <- case M.lookup fn fm of
              Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
-             Just i  -> addOp (OpFunCall i)
-  return $ param ++ [fcall]
+             Just i  -> do
+               fc <- addOp $ OpFunCall i
+               nv <- numVars <$> get
+               if nv < 2
+                 then return [fc]
+                 else do
+                   swp <- addOp $ OpSwap
+                   return [fc, swp]
+  return $ param ++ fcall
 
 genExprAsm _  (Var _)      = do
   numDrops <- numVars <$> get
@@ -165,7 +180,10 @@ genExprAsm _  (Var _)      = do
     then addVar >> sequence [addOp OpDup]
     else return []
 
-genExprAsm _  e            = error $ "Expression '" ++ show e ++ "' not supported yet"
+genExprAsm fm (CmpLt e1 e2) = genArithAsm fm OpLT e1 e2
+genExprAsm fm (CmpLe e1 e2) = genArithAsm fm OpLE e1 e2
+genExprAsm fm (CmpEq e1 e2) = genArithAsm fm OpEQ e1 e2
+genExprAsm fm (Negate n)    = genArithAsm fm OpMul (Int (-1)) n
 
 addVar, rmVar :: State CompileState ()
 addVar = modify $ \c -> c{numVars = succ (numVars c)}
@@ -192,9 +210,13 @@ opLength OpAdd         = 1
 opLength OpSub         = 1
 opLength OpMul         = 1
 opLength OpDiv         = 1
+opLength OpLT          = 1
+opLength OpLE          = 1
+opLength OpEQ          = 1
 opLength OpDup         = 1
 opLength OpDrop        = 1
 opLength OpNop         = 1
+opLength OpSwap        = 1
 opLength (OpFunDef _)  = 5
 opLength OpFunEnd      = 1
 opLength (OpFunCall _) = 5

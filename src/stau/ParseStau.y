@@ -13,12 +13,11 @@ import Stau
 %tokentype { Token }
 %error { parseError }
 %monad { Either String }
+%left if then else
 %left '+' '-'
 %left '*' '/'
 %left NEG
-%left if
-%left then
-%left else
+%left '<=' '<' '=='
 %left AP
 %left VAR
 
@@ -28,6 +27,9 @@ import Stau
       if              { TokenIf }
       then            { TokenThen }
       else            { TokenElse }
+      '=='            { TokenCmpEq }
+      '<'             { TokenCmpLt }
+      '<='            { TokenCmpLe }
       '='             { TokenEq }
       '+'             { TokenPlus }
       '-'             { TokenMinus }
@@ -56,6 +58,9 @@ Exp  : Exp '+' Exp           { Plus $1 $3 }
      | Exp '-' Exp           { Minus $1 $3 }
      | Exp '*' Exp           { Times $1 $3 }
      | Exp '/' Exp           { Div $1 $3 }
+     | Exp '<=' Exp          { CmpLe $1 $3 }
+     | Exp '==' Exp          { CmpEq $1 $3 }
+     | Exp '<' Exp           { CmpLt $1 $3 }
      | int                   { Int $1 }
      | var %prec VAR         { Var $1 }
      | var Exp %prec AP      { FunApp $1 $2 }
@@ -82,6 +87,9 @@ stauLexer (c:cs)
       | isSpace c && not (isEndline c) = stauLexer cs
       | isAlpha c = lexVar (c:cs)
       | isDigit c = lexNum (c:cs)
+stauLexer ('=':'=':cs) = comb cs TokenCmpEq
+stauLexer ('<':'=':cs) = comb cs TokenCmpLe
+stauLexer ('<':cs) = comb cs TokenCmpLt
 stauLexer ('=':cs) = comb cs TokenEq
 stauLexer ('+':cs) = comb cs TokenPlus
 stauLexer ('-':cs) = comb cs TokenMinus

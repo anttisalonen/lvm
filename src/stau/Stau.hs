@@ -12,6 +12,9 @@ data Exp
       | Minus Exp Exp 
       | Times Exp Exp 
       | Div Exp Exp 
+      | CmpEq Exp Exp 
+      | CmpLt Exp Exp 
+      | CmpLe Exp Exp 
       | Int Int 
       | Var String 
       | FunApp String Exp
@@ -28,6 +31,9 @@ data Token
       | TokenMinus
       | TokenTimes
       | TokenDiv
+      | TokenCmpEq
+      | TokenCmpLt
+      | TokenCmpLe
       | TokenIf
       | TokenThen
       | TokenElse
