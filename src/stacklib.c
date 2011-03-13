@@ -18,9 +18,13 @@ enum opcode {
 	opcode_sub,
 	opcode_mul,
 	opcode_div,
+	opcode_lt,
+	opcode_le,
+	opcode_eq,
 	opcode_dup,
 	opcode_drop,
 	opcode_nop,
+	opcode_swap,
 };
 
 enum valuetype {
@@ -67,9 +71,13 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_SUB:
 		case OPCODE_MUL:
 		case OPCODE_DIV:
+		case OPCODE_LT:
+		case OPCODE_LE:
+		case OPCODE_EQ:
 		case OPCODE_DUP:
 		case OPCODE_DROP:
 		case OPCODE_NOP:
+		case OPCODE_SWAP:
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -102,10 +110,18 @@ static enum opcode opcode_to_enum(int opcode)
 			return opcode_mul;
 		case OPCODE_DIV:
 			return opcode_div;
+		case OPCODE_LT:
+			return opcode_lt;
+		case OPCODE_LE:
+			return opcode_le;
+		case OPCODE_EQ:
+			return opcode_eq;
 		case OPCODE_DUP:
 			return opcode_dup;
 		case OPCODE_DROP:
 			return opcode_drop;
+		case OPCODE_SWAP:
+			return opcode_swap;
 		default: // nop
 			return opcode_nop;
 	}
@@ -120,7 +136,11 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 		case OPCODE_SUB:
 		case OPCODE_MUL:
 		case OPCODE_DIV:
+		case OPCODE_LT:
+		case OPCODE_LE:
+		case OPCODE_EQ:
 		case OPCODE_DUP:
+		case OPCODE_SWAP:
 		case OPCODE_DROP:
 		case OPCODE_NOP:
 			sv->vt = valuetype_opcode;
@@ -202,6 +222,15 @@ static void print_stackvalue(const stackvalue *sv)
 				case opcode_div:
 					printf("DIV\n");
 					return;
+				case opcode_lt:
+					printf("LT\n");
+					return;
+				case opcode_le:
+					printf("LE\n");
+					return;
+				case opcode_eq:
+					printf("EQ\n");
+					return;
 				case opcode_dup:
 					printf("DUP\n");
 					return;
@@ -210,6 +239,9 @@ static void print_stackvalue(const stackvalue *sv)
 					return;
 				case opcode_nop:
 					printf("NOP\n");
+					return;
+				case opcode_swap:
+					printf("SWAP\n");
 					return;
 			}
 		default:
@@ -240,6 +272,9 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 				case opcode_sub:
 				case opcode_mul:
 				case opcode_div:
+				case opcode_lt:
+				case opcode_le:
+				case opcode_eq:
 					if(*sp < 2) {
 						fprintf(stderr, "arithmetic with %d elements in stack\n",
 								*sp);
@@ -270,9 +305,26 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 							stack[*sp - 1].value.intvalue = i2 * i1;
 							dprintf("[%d] %d * %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
 							break;
-						default: // div
+						case opcode_div:
 							stack[*sp - 1].value.intvalue = i2 / i1;
 							dprintf("[%d] %d / %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_lt:
+							stack[*sp - 1].value.intvalue = i2 < i1;
+							dprintf("[%d] %d < %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_le:
+							stack[*sp - 1].value.intvalue = i2 <= i1;
+							dprintf("[%d] %d <= %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_eq:
+							stack[*sp - 1].value.intvalue = i2 == i1;
+							dprintf("[%d] %d == %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
+							break;
+						case opcode_dup:
+						case opcode_drop:
+						case opcode_nop:
+						case opcode_swap:
 							break;
 					}
 					return 0;
@@ -297,6 +349,22 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 					(*sp)--;
 					return 0;
 				case opcode_nop:
+					return 0;
+				case opcode_swap:
+					if(*sp < 2) {
+						fprintf(stderr, "SWAP with %d elements\n", *sp);
+						return 1;
+					}
+#ifdef DEBUG
+					if(stackvalue_is_int(&stack[*sp - 1]) && stackvalue_is_int(&stack[*sp - 2])) {
+						dprintf("[%d] SWAP %d %d\n", *sp,
+								stack[*sp - 1].value.intvalue,
+								stack[*sp - 2].value.intvalue);
+					}
+#endif
+					stackvalue tmp = stack[*sp - 1];
+					stack[*sp - 1] = stack[*sp - 2];
+					stack[*sp - 2] = tmp;
 					return 0;
 			}
 		default:
@@ -339,8 +407,10 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 	stackvalue sv;
 	switch(buf[*pc]) {
 		case OPCODE_DEFUN_START:
-			if(*current_fundef)
+			if(*current_fundef) {
+				fprintf(stderr, "Function definition within a function definition\n");
 				return 1;
+			}
 			(*pc)++;
 			if(*pc + 4 >= bufsize)
 				return 1;
@@ -362,6 +432,8 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 			(*pc)++;
 			return 0;
 		default:
+			fprintf(stderr, "Unexpected opcode at 0x%x: 0x%x\n",
+					*pc, buf[*pc]);
 			return 1;
 	}
 }
