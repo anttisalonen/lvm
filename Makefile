@@ -11,25 +11,23 @@ STAUDIR = $(SRCDIR)/stau
 TESTDIR = tests/src
 TESTSBINDIR = tests/bin
 
-all: stack stack-gen stau
+STACKOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack.o)
+STACKGENOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack-gen.o)
 
-$(BINDIR):
-	mkdir -p $(BINDIR)
+all: $(BINDIR)/stack $(BINDIR)/stack-gen $(BINDIR)/stau
 
-stack: $(BINDIR)/stack
+$(BINDIR)/stack: $(STACKOBJS)
 
-$(BINDIR)/stack: $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $(SRCDIR)/stacklib.c $(SRCDIR)/stack.c
+$(BINDIR)/stack-gen: $(STACKGENOBJS)
 
-stack-gen: $(BINDIR)/stack-gen
+$(BINDIR)/stack $(BINDIR)/stack-gen:
+	@mkdir -p $(BINDIR)
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BINDIR)/stack-gen: $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $(SRCDIR)/stacklib.c $(SRCDIR)/stack-gen.c
+$(STACKOBJS) $(STACKGENOBJS): $(SRCDIR)/stack.h $(SRCDIR)/stacklib.h
 
 $(STAUDIR)/ParseStau.hs: $(STAUDIR)/ParseStau.y
 	$(HAPPY) -o $@ $<
-
-stau: $(BINDIR)/stau
 
 $(BINDIR)/stau: $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hs
 	$(HC) $(HFLAGS) -o $(BINDIR)/stau $(STAUDIR)/ParseStau.hs $(STAUDIR)/Stau.hs $(STAUDIR)/Main.hs
@@ -49,5 +47,5 @@ tests: $(TESTSBINDIR) stau stack stack-gen
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o $(TESTSBINDIR)
 
-.PHONY: clean all
+.PHONY: clean
 
