@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "stack.h"
 #include "stacklib.h"
@@ -169,17 +170,28 @@ int main(int argc, char **argv)
 			else
 				fprintf(stderr, "?\n");
 		}
-		else if(interactive && !strncmp(buf, "run", 3)) {
-			parse_buffer(interactive_buffer,
-					interactive_bufferpos);
+		else if(!strncmp(buf, "LOAD ", 5)) {
+			int succ;
+			long int parsed_num = getnum(buf + 5, &succ);
+			if(!succ)
+				fprintf(stderr, "?\n");
+			else
+				output_num(OPCODE_LOAD, parsed_num);
 		}
-		else {
+		else if(isdigit(buf[0])) {
 			int succ;
 			long int parsed_num = getnum(buf, &succ);
 			if(!succ)
 				fprintf(stderr, "?\n");
 			else
 				output_num(OPCODE_INT, parsed_num);
+		}
+		else if(interactive && !strncmp(buf, "run", 3)) {
+			parse_buffer(interactive_buffer,
+					interactive_bufferpos);
+		}
+		else if(buf[0]) {
+			fprintf(stderr, "?\n");
 		}
 	}
 	return 0;

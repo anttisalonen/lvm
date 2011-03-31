@@ -18,6 +18,7 @@
 #define OPCODE_DROP		0x41
 #define OPCODE_NOP		0x42
 #define OPCODE_SWAP		0x43
+#define OPCODE_LOAD		0x44
 
 #endif
 

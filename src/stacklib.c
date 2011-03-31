@@ -47,7 +47,10 @@ static int functions[MAX_NUM_FUNCTIONS];
 #define MAX_CALL_DEPTH 1024
 
 static int return_depth = 0;
-static int return_points[MAX_CALL_DEPTH];
+static struct { 
+	int ret_addr;
+	int fp;
+} return_points[MAX_CALL_DEPTH];
 
 static int get_int(const char *buf, int *pc, stackvalue *sv)
 {
@@ -82,6 +85,7 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_CALLFUN:
 		case OPCODE_BRANCH:
 		case OPCODE_BRANCHNZ:
+		case OPCODE_LOAD:
 			(*pc)++;
 			if(*pc + 4 >= bufsize)
 				return 1;
@@ -155,7 +159,7 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 				(*pc) = -1;
 			}
 			else {
-				(*pc) = return_points[--return_depth];
+				(*pc) = return_points[return_depth--].ret_addr;
 			}
 			*interp = 0;
 			return 0;
@@ -168,7 +172,9 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 				return 1;
 			if(return_depth + 1 >= MAX_CALL_DEPTH)
 				return 1;
-			return_points[return_depth++] = *pc;
+			return_depth++;
+			return_points[return_depth].ret_addr = *pc;
+			return_points[return_depth].fp = *sp;
 			*pc = functions[sv->value.intvalue - 1];
 			return 0;
 		case OPCODE_BRANCHNZ:
@@ -193,6 +199,20 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 				return 1;
 			(*pc) = sv->value.intvalue;
 			return 0;
+		case OPCODE_LOAD:
+			(*pc)++;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			if(get_int(buf, pc, sv))
+				return 1;
+			if(sv->value.intvalue < -return_points[return_depth].fp ||
+					sv->value.intvalue > *sp - return_points[return_depth].fp + 1)
+				return 1;
+			sv->value.intvalue = stack[sv->value.intvalue + return_points[return_depth].fp].value.intvalue;
+			printf("Load %d; fp: %d; sp: %d\n", sv->value.intvalue, return_points[return_depth].fp, *sp);
+			return 0;
+
+	return 0;
 		default:
 			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
 					*pc, buf[*pc]);
@@ -397,6 +417,7 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 static int run_code(const char *buf, unsigned int bufsize)
 {
 	int pc = functions[0];
+	return_points[0].fp = 0;
 	stackvalue stack[STACK_SIZE];
 	int sp = 0;
 	while(pc != bufsize && pc != -1) {
