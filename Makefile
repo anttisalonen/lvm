@@ -35,17 +35,17 @@ $(BINDIR)/stau: $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hs
 $(TESTSBINDIR):
 	mkdir -p $(TESTSBINDIR)
 
-tests: $(TESTSBINDIR) stau stack stack-gen
+tests: $(TESTSBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
 	rm -f $(TESTSBINDIR)/results.txt
 	for file in $(TESTDIR)/*.stau; do \
 		$(BINDIR)/stau -o $(TESTSBINDIR)/`basename $$file .stau` $$file; \
 		$(BINDIR)/stack-gen < $(TESTSBINDIR)/`basename $$file .stau` > $(TESTSBINDIR)/a.out; \
 		$(BINDIR)/stack $(TESTSBINDIR)/a.out | tee -a $(TESTSBINDIR)/results.txt; \
 	done
-	cmp $(TESTDIR)/results.txt $(TESTSBINDIR)/results.txt
+	@cmp $(TESTDIR)/results.txt $(TESTSBINDIR)/results.txt
 
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o $(TESTSBINDIR)
 
-.PHONY: clean
+.PHONY: clean tests
 
