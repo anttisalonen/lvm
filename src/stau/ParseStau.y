@@ -13,13 +13,15 @@ import Stau
 %tokentype { Token }
 %error { parseError }
 %monad { Either String }
-%left if then else
+
+%nonassoc if then else
+%nonassoc '<=' '<' '=='
+%left AP
 %left '+' '-'
 %left '*' '/'
 %left NEG
-%left '<=' '<' '=='
-%left AP
 %left VAR
+%left '(' ')'
 
 %token 
       var             { TokenVar $$ }
@@ -53,6 +55,10 @@ Vars : var Vars { $1 : $2 }
 Function :: { Function }
 Function : Vars '=' Exp { Function (head $1) (tail $1) $3 }
 
+Atoms :: { [Exp] }
+Atoms : {- empty -} { [] }
+     | Atom Atoms   { $1 : $2 }
+
 Exp :: { Exp }
 Exp  : Exp '+' Exp           { Plus $1 $3 }
      | Exp '-' Exp           { Minus $1 $3 }
@@ -61,12 +67,16 @@ Exp  : Exp '+' Exp           { Plus $1 $3 }
      | Exp '<=' Exp          { CmpLe $1 $3 }
      | Exp '==' Exp          { CmpEq $1 $3 }
      | Exp '<' Exp           { CmpLt $1 $3 }
-     | int                   { Int $1 }
-     | var %prec VAR         { Var $1 }
-     | var Exp %prec AP      { FunApp $1 $2 }
+     | int %prec VAR         { Int $1 }
      | '(' Exp ')'           { Brack $2 }
+     | var Atoms %prec AP    { FunApp $1 $2 }
      | '-' Exp %prec NEG     { Negate $2 }
      | if Exp then Exp else Exp { IfThenElse $2 $4 $6 }
+
+Atom :: { Exp }
+Atom : int %prec VAR { Int $1 }
+     | '(' Exp ')'   { Brack $2 }
+
 {
 
 parseError :: [Token] -> Either String a
@@ -104,7 +114,7 @@ lexNum cs = comb rest (TokenInt (read num))
       where (num,rest) = span isDigit cs
 
 lexVar cs = comb rest var
-  where (tok, rest) = span isAlpha cs
+  where (tok, rest) = span isAlphaNum cs
         var         = case tok of
                         "if"   -> TokenIf
                         "then" -> TokenThen

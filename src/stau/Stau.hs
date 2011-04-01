@@ -16,8 +16,7 @@ data Exp
       | CmpLt Exp Exp 
       | CmpLe Exp Exp 
       | Int Int 
-      | Var String 
-      | FunApp String Exp
+      | FunApp String [Exp]
       | Brack Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp

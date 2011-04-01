@@ -52,7 +52,7 @@ main = do
       Left err  -> putStrLn err >> exitWith (ExitFailure 1)
 
 getAST :: String -> Either String String
-getAST s = stauLexer s >>= parseStau >>= return . concatMap show
+getAST s = stauLexer s >>= parseStau >>= return . intercalate "\n" . map show
 compile :: String -> Either String String
 compile s = stauLexer s >>= parseStau >>= return . concatMap show . generateAssembly
 
@@ -70,9 +70,12 @@ data Opcode = OpInt Int
             | OpSwap
             | OpFunDef Int
             | OpFunEnd
+            | OpRet0
+            | OpRet1
             | OpFunCall Int
             | OpBr Int
             | OpBrNz Int
+            | OpLoad Int
 
 addLF :: String -> String
 addLF = (++ "\n")
@@ -92,35 +95,44 @@ instance Show Opcode where
   show OpSwap        = addLF $ "SWAP"
   show (OpFunDef i)  = addLF $ "FUNDEF " ++ show i
   show OpFunEnd      = addLF $ "FUNEND"
+  show OpRet0        = addLF $ "RET0"
+  show OpRet1        = addLF $ "RET1"
   show (OpFunCall i) = addLF $ "FUNCALL " ++ show i
   show (OpBr i)      = addLF $ "BR " ++ show i
   show (OpBrNz i)    = addLF $ "BRNZ " ++ show i
+  show (OpLoad i)    = addLF $ "LOAD " ++ show i
 
 generateAssembly :: [Function] -> [Opcode]
-generateAssembly fns = evalState (generateAssembly' fns) $ CompileState 0 0 0
+generateAssembly fns = evalState (generateAssembly' fns) $ CompileState 0 0 0 fm M.empty
+  where fm = createFunctionMap fns
 
 generateAssembly' :: [Function] -> State CompileState [Opcode]
 generateAssembly' fns = 
-  let fm = createFunctionMap fns
-  in concat `liftM` forM fns (genFunctionAsm fm)
+  concat `liftM` forM fns genFunctionAsm
 
 type FunctionMap = M.Map String Int
+
+type ValueMap = FunctionMap
 
 data CompileState = CompileState {
     currPos :: Int
   , numVars :: Int
   , minVars :: Int
+  , functions :: ValueMap
+  , variables :: ValueMap
   }
 
-genFunctionAsm :: FunctionMap -> Function -> State CompileState [Opcode]
-genFunctionAsm fm f = do
+genFunctionAsm :: Function -> State CompileState [Opcode]
+genFunctionAsm f = do
+  fm <- functions <$> get
   let numArgs = length $ getFunArgs f
+      paramMap = M.fromList $ zip (getFunArgs f) [1..]
   modify $ \c -> c{numVars = numArgs, minVars = numArgs}
+  modify $ \c -> c{variables = (variables c) `M.union` paramMap}
   fd <- addOp $ OpFunDef (fm M.! getFunName f)
-  fds <- genExprAsm fm (getFunExp f)
-  fe <- addOp $ OpFunEnd
-  drops <- addDrops
-  return $ fd : fds ++ drops ++ [fe]
+  fds <- genExprAsm (getFunExp f)
+  fe <- addOp $ if getFunName f == "main" then OpFunEnd else OpRet1
+  return $ fd : fds ++ [fe]
 
 manyOps :: (Monad m) => [m [a]] -> m [a]
 manyOps []     = return []
@@ -129,65 +141,67 @@ manyOps (n:ns) = do
   ps <- manyOps ns
   return $ concat [p,ps]
 
-genArithAsm :: FunctionMap -> Opcode -> Exp -> Exp -> State CompileState [Opcode]
-genArithAsm fm op e1 e2 = do
-  a1 <- genExprAsm fm e1
-  a2 <- genExprAsm fm e2
+genArithAsm :: Opcode -> Exp -> Exp -> State CompileState [Opcode]
+genArithAsm op e1 e2 = do
+  a1 <- genExprAsm e1
+  a2 <- genExprAsm e2
   rmVar
   opc <- addOp op
   return $ a1 ++ a2 ++ [opc]
 
-genExprAsm :: FunctionMap -> Exp -> State CompileState [Opcode]
-genExprAsm fm (Plus e1 e2)  = genArithAsm fm OpAdd e1 e2
-genExprAsm fm (Minus e1 e2) = genArithAsm fm OpSub e1 e2
-genExprAsm fm (Times e1 e2) = genArithAsm fm OpMul e1 e2
-genExprAsm fm (Div e1 e2)   = genArithAsm fm OpDiv e1 e2
-genExprAsm _  (Int i)       = addVar >> sequence [addOp $ OpInt i]
-genExprAsm fm (Brack e)     = genExprAsm fm e
+genExprAsm :: Exp -> State CompileState [Opcode]
+genExprAsm (Plus e1 e2)  = genArithAsm OpAdd e1 e2
+genExprAsm (Minus e1 e2) = genArithAsm OpSub e1 e2
+genExprAsm (Times e1 e2) = genArithAsm OpMul e1 e2
+genExprAsm (Div e1 e2)   = genArithAsm OpDiv e1 e2
+genExprAsm (Int i)       = addVar >> sequence [addOp $ OpInt i]
+genExprAsm (Brack e)     = genExprAsm e
 
-genExprAsm fm (IfThenElse e1 e2 e3) = do
-  o1 <- genExprAsm fm e1
+genExprAsm (IfThenElse e1 e2 e3) = do
+  o1 <- genExprAsm e1
   rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
-  elseBr <- genExprAsm fm e3
+  elseBr <- genExprAsm e3
   elseDrops <- addDrops
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
-  thenBr <- genExprAsm fm e2
+  thenBr <- genExprAsm e2
   thenDrops <- addDrops
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
   return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
 
-genExprAsm fm (FunApp fn ep) = do
-  param <- genExprAsm fm ep
-  fcall <- case M.lookup fn fm of
-             Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
-             Just i  -> do
-               fc <- addOp $ OpFunCall i
-               nv <- numVars <$> get
-               if nv < 2
-                 then return [fc]
-                 else do
-                   swp <- addOp $ OpSwap
-                   return [fc, swp]
-  return $ param ++ fcall
+genExprAsm (FunApp fn eps) = do
+  if null eps
+    then do
+      vars <- variables <$> get
+      case M.lookup fn vars of
+        Nothing -> error $ "Variable \"" ++ fn ++ "\" not defined"
+        Just v  -> do
+          addOp (OpLoad (-v)) >>= return . (:[])
+    else do
+      params <- concat <$> mapM genExprAsm (reverse eps)
+      fm <- functions <$> get
+      fcall <- case M.lookup fn fm of
+                 Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
+                 Just i  -> do
+                   addOp $ OpFunCall i
+      return $ params ++ [fcall]
 
-genExprAsm _  (Var _)      = do
-  numDrops <- numVars <$> get
-  if numDrops <= 1
-    then addVar >> sequence [addOp OpDup]
-    else return []
-
-genExprAsm fm (CmpLt e1 e2) = genArithAsm fm OpLT e1 e2
-genExprAsm fm (CmpLe e1 e2) = genArithAsm fm OpLE e1 e2
-genExprAsm fm (CmpEq e1 e2) = genArithAsm fm OpEQ e1 e2
-genExprAsm fm (Negate n)    = genArithAsm fm OpMul (Int (-1)) n
+genExprAsm (CmpLt e1 e2) = genArithAsm OpLT e1 e2
+genExprAsm (CmpLe e1 e2) = genArithAsm OpLE e1 e2
+genExprAsm (CmpEq e1 e2) = genArithAsm OpEQ e1 e2
+genExprAsm (Negate (Int i)) = addVar >> sequence [addOp $ OpInt (-i)]
+genExprAsm (Negate n)       = genArithAsm OpMul (Int (-1)) n
 
 addVar, rmVar :: State CompileState ()
-addVar = modify $ \c -> c{numVars = succ (numVars c)}
-rmVar  = modify $ \c -> c{numVars = pred (numVars c)}
+addVar = addVars 1
+rmVar  = rmVars 1
+
+addVars, rmVars :: Int -> State CompileState ()
+addVars i = modify $ \c -> c{numVars = numVars c + i}
+rmVars  i = modify $ \c -> c{numVars = numVars c - i}
 
 addDrops :: State CompileState [Opcode]
 addDrops = do
@@ -219,9 +233,12 @@ opLength OpNop         = 1
 opLength OpSwap        = 1
 opLength (OpFunDef _)  = 5
 opLength OpFunEnd      = 1
+opLength OpRet0        = 1
+opLength OpRet1        = 1
 opLength (OpFunCall _) = 5
 opLength (OpBr _)      = 5
 opLength (OpBrNz _)    = 5
+opLength (OpLoad _)    = 5
 
 createFunctionMap :: [Function] -> M.Map String Int
 createFunctionMap = M.adjust (const 1) "main" . fst . foldl' go (M.empty, 2)
