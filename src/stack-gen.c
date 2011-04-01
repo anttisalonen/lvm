@@ -73,6 +73,18 @@ void output(char opcode)
 	output_char(opcode);
 }
 
+int funend(char opcode, int fundef)
+{
+	if(fundef) {
+		fundef = 0;
+		output(opcode);
+	}
+	else {
+		fprintf(stderr, "?\n");
+	}
+	return fundef;
+}
+
 int main(int argc, char **argv)
 {
 	char buf[1024];
@@ -163,12 +175,13 @@ int main(int argc, char **argv)
 			}
 		}
 		else if(!strncmp(buf, "FUNEND", 6)) {
-			if(fundef) {
-				fundef = 0;
-				output(OPCODE_DEFUN_END);
-			}
-			else
-				fprintf(stderr, "?\n");
+			fundef = funend(OPCODE_DEFUN_END, fundef);
+		}
+		else if(!strncmp(buf, "RET0", 4)) {
+			fundef = funend(OPCODE_RET0, fundef);
+		}
+		else if(!strncmp(buf, "RET1", 4)) {
+			fundef = funend(OPCODE_RET1, fundef);
 		}
 		else if(!strncmp(buf, "LOAD ", 5)) {
 			int succ;
@@ -178,7 +191,7 @@ int main(int argc, char **argv)
 			else
 				output_num(OPCODE_LOAD, parsed_num);
 		}
-		else if(isdigit(buf[0])) {
+		else if(buf[0] == '-' || isdigit(buf[0])) {
 			int succ;
 			long int parsed_num = getnum(buf, &succ);
 			if(!succ)
