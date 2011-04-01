@@ -19,6 +19,8 @@
 #define OPCODE_NOP		0x42
 #define OPCODE_SWAP		0x43
 #define OPCODE_LOAD		0x44
+#define OPCODE_RET0		0x45
+#define OPCODE_RET1		0x46
 
 #endif
 

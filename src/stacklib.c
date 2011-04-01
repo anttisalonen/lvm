@@ -129,99 +129,9 @@ static enum opcode opcode_to_enum(int opcode)
 	}
 }
 
-static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
-		int *interp, stackvalue *stack, int *sp)
+static void print_stackvalue(int sp, const stackvalue *sv)
 {
-	*interp = 1;
-	switch(buf[*pc]) {
-		case OPCODE_ADD:
-		case OPCODE_SUB:
-		case OPCODE_MUL:
-		case OPCODE_DIV:
-		case OPCODE_LT:
-		case OPCODE_LE:
-		case OPCODE_EQ:
-		case OPCODE_DUP:
-		case OPCODE_SWAP:
-		case OPCODE_DROP:
-		case OPCODE_NOP:
-			sv->vt = valuetype_opcode;
-			sv->value.op = opcode_to_enum(buf[*pc]);
-			(*pc)++;
-			return 0;
-		case OPCODE_INT:
-			(*pc)++;
-			if(*pc + 4 >= bufsize)
-				return 1;
-			return get_int(buf, pc, sv);
-		case OPCODE_DEFUN_END:
-			if(return_depth == 0) {
-				(*pc) = -1;
-			}
-			else {
-				(*pc) = return_points[return_depth--].ret_addr;
-			}
-			*interp = 0;
-			return 0;
-		case OPCODE_CALLFUN:
-			(*pc)++;
-			if(*pc + 4 >= bufsize)
-				return 1;
-			*interp = 0;
-			if(get_int(buf, pc, sv))
-				return 1;
-			if(return_depth + 1 >= MAX_CALL_DEPTH)
-				return 1;
-			return_depth++;
-			return_points[return_depth].ret_addr = *pc;
-			return_points[return_depth].fp = *sp;
-			*pc = functions[sv->value.intvalue - 1];
-			return 0;
-		case OPCODE_BRANCHNZ:
-			*interp = 0;
-			if(*sp < 1)
-				return 1;
-			if(!stackvalue_is_int(&stack[*sp - 1]))
-				return 1;
-			int32_t i1 = stack[*sp - 1].value.intvalue;
-			(*sp)--;
-			if(!i1) {
-				(*pc) += 5;
-				return 0;
-			}
-			/* FALL THROUGH */
-		case OPCODE_BRANCH:
-			(*pc)++;
-			*interp = 0;
-			if(*pc + 4 >= bufsize)
-				return 1;
-			if(get_int(buf, pc, sv))
-				return 1;
-			(*pc) = sv->value.intvalue;
-			return 0;
-		case OPCODE_LOAD:
-			(*pc)++;
-			if(*pc + 4 >= bufsize)
-				return 1;
-			if(get_int(buf, pc, sv))
-				return 1;
-			if(sv->value.intvalue < -return_points[return_depth].fp ||
-					sv->value.intvalue > *sp - return_points[return_depth].fp + 1)
-				return 1;
-			sv->value.intvalue = stack[sv->value.intvalue + return_points[return_depth].fp].value.intvalue;
-			printf("Load %d; fp: %d; sp: %d\n", sv->value.intvalue, return_points[return_depth].fp, *sp);
-			return 0;
-
-	return 0;
-		default:
-			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
-					*pc, buf[*pc]);
-			return 1;
-	}
-}
-
-static void print_stackvalue(const stackvalue *sv)
-{
+	printf("[%d] ", sp);
 	switch(sv->vt) {
 		case valuetype_int:
 			printf("INT %d\n", sv->value.intvalue);
@@ -272,8 +182,111 @@ static void print_stack(const stackvalue *stack, int sp)
 {
 	sp--;
 	while(sp >= 0) {
-		print_stackvalue(&stack[sp]);
+		print_stackvalue(sp, &stack[sp]);
 		sp--;
+	}
+}
+
+static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
+		int *interp, stackvalue *stack, int *sp)
+{
+	*interp = 1;
+	switch(buf[*pc]) {
+		case OPCODE_ADD:
+		case OPCODE_SUB:
+		case OPCODE_MUL:
+		case OPCODE_DIV:
+		case OPCODE_LT:
+		case OPCODE_LE:
+		case OPCODE_EQ:
+		case OPCODE_DUP:
+		case OPCODE_SWAP:
+		case OPCODE_DROP:
+		case OPCODE_NOP:
+			sv->vt = valuetype_opcode;
+			sv->value.op = opcode_to_enum(buf[*pc]);
+			(*pc)++;
+			return 0;
+		case OPCODE_INT:
+			(*pc)++;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			return get_int(buf, pc, sv);
+		case OPCODE_DEFUN_END:
+		case OPCODE_RET0:
+		case OPCODE_RET1:
+			if(return_depth == 0) {
+				*pc = -1;
+			}
+			else {
+				if(buf[*pc] == OPCODE_RET0) {
+					*sp = return_points[return_depth].fp;
+				}
+				else if(buf[*pc] == OPCODE_RET1) {
+					int old_sp = *sp - 1;
+					*sp = return_points[return_depth].fp;
+					stack[*sp - 1] = stack[old_sp];
+					dprintf("Old sp: %d; sp: %d\n", old_sp, *sp);
+				}
+				*pc = return_points[return_depth].ret_addr;
+				return_depth--;
+			}
+			*interp = 0;
+			return 0;
+		case OPCODE_CALLFUN:
+			(*pc)++;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			*interp = 0;
+			if(get_int(buf, pc, sv))
+				return 1;
+			if(return_depth + 1 >= MAX_CALL_DEPTH)
+				return 1;
+			return_depth++;
+			return_points[return_depth].ret_addr = *pc;
+			return_points[return_depth].fp = *sp;
+			*pc = functions[sv->value.intvalue - 1];
+			return 0;
+		case OPCODE_BRANCHNZ:
+			*interp = 0;
+			if(*sp < 1)
+				return 1;
+			if(!stackvalue_is_int(&stack[*sp - 1]))
+				return 1;
+			int32_t i1 = stack[*sp - 1].value.intvalue;
+			(*sp)--;
+			if(!i1) {
+				(*pc) += 5;
+				return 0;
+			}
+			/* FALL THROUGH */
+		case OPCODE_BRANCH:
+			(*pc)++;
+			*interp = 0;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			if(get_int(buf, pc, sv))
+				return 1;
+			(*pc) = sv->value.intvalue;
+			return 0;
+		case OPCODE_LOAD:
+			(*pc)++;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			if(get_int(buf, pc, sv))
+				return 1;
+			if(sv->value.intvalue < -return_points[return_depth].fp ||
+					sv->value.intvalue > *sp - return_points[return_depth].fp + 1)
+				return 1;
+			sv->value.intvalue = stack[sv->value.intvalue + return_points[return_depth].fp].value.intvalue;
+			dprintf("Load %d; fp: %d; sp: %d\n", sv->value.intvalue, return_points[return_depth].fp, *sp);
+			return 0;
+
+	return 0;
+		default:
+			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
+					*pc, buf[*pc]);
+			return 1;
 	}
 }
 
@@ -428,7 +441,8 @@ static int run_code(const char *buf, unsigned int bufsize)
 			return 1;
 		}
 		if(get_value(buf, &sv, &pc, bufsize, &interp, stack, &sp)) {
-			fprintf(stderr, "Invalid instruction on value\n");
+			fprintf(stderr, "Invalid instruction on value at PC 0x%02x\n",
+					pc);
 			return 1;
 		}
 		if(interp) {
@@ -467,6 +481,8 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 			*current_fundef = sv.value.intvalue;
 			return 0;
 		case OPCODE_DEFUN_END:
+		case OPCODE_RET0:
+		case OPCODE_RET1:
 			if(!*current_fundef)
 				return 1;
 			*current_fundef = 0;
