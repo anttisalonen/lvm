@@ -35,14 +35,20 @@ $(BINDIR)/stau: $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hs
 $(TESTSBINDIR):
 	mkdir -p $(TESTSBINDIR)
 
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
 tests: $(TESTSBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
-	rm -f $(TESTSBINDIR)/results.txt
-	for file in $(TESTDIR)/*.stau; do \
+	@rm -f $(TESTSBINDIR)/result-*.txt
+	@for file in $(TESTDIR)/*.stau; do \
 		$(BINDIR)/stau -o $(TESTSBINDIR)/`basename $$file .stau` $$file; \
-		$(BINDIR)/stack-gen < $(TESTSBINDIR)/`basename $$file .stau` > $(TESTSBINDIR)/a.out; \
-		$(BINDIR)/stack $(TESTSBINDIR)/a.out | tee -a $(TESTSBINDIR)/results.txt; \
+		$(BINDIR)/stack-gen < $(TESTSBINDIR)/`basename $$file .stau` | \
+			$(BINDIR)/stack - > $(TESTSBINDIR)/result-`basename $$file .stau`.txt; \
+		(cmp $(TESTSBINDIR)/result-`basename $$file .stau`.txt \
+			$(TESTDIR)/correct-`basename $$file .stau`.txt >/dev/null 2>&1 && \
+				echo "Test `basename $$file .stau` successful") || \
+					echo "Test `basename $$file .stau` failed"; \
 	done
-	@cmp $(TESTDIR)/results.txt $(TESTSBINDIR)/results.txt
 
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o $(TESTSBINDIR)
