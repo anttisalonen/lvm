@@ -21,6 +21,9 @@
 #define OPCODE_LOAD		0x44
 #define OPCODE_RET0		0x45
 #define OPCODE_RET1		0x46
+#define OPCODE_NEW		0x47
+#define OPCODE_RSTORE		0x48
+#define OPCODE_RLOAD		0x49
 
 #endif
 

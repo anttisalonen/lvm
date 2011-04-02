@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "stack.h"
 
@@ -25,11 +26,15 @@ enum opcode {
 	opcode_drop,
 	opcode_nop,
 	opcode_swap,
+	opcode_new,
+	opcode_rstore,
+	opcode_rload,
 };
 
 enum valuetype {
 	valuetype_int,
 	valuetype_opcode,
+	valuetype_reference,
 };
 
 typedef struct {
@@ -37,12 +42,22 @@ typedef struct {
 	union {
 		enum opcode op;
 		int32_t intvalue;
+		struct {
+			int32_t reference_id;
+			int32_t mem_size;
+			void *allocated_object;
+		} ref_value;
 	} value;
 } stackvalue;
 
 #define MAX_NUM_FUNCTIONS 1024
 
 static int functions[MAX_NUM_FUNCTIONS];
+
+#define MAX_NUM_OBJECTS 1024
+static stackvalue objects[MAX_NUM_OBJECTS];
+
+static int next_reference_id = 1;
 
 #define MAX_CALL_DEPTH 1024
 
@@ -76,9 +91,12 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_LE:
 		case OPCODE_EQ:
 		case OPCODE_DUP:
+		case OPCODE_NEW:
 		case OPCODE_DROP:
 		case OPCODE_NOP:
 		case OPCODE_SWAP:
+		case OPCODE_RSTORE:
+		case OPCODE_RLOAD:
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -120,10 +138,16 @@ static enum opcode opcode_to_enum(int opcode)
 			return opcode_eq;
 		case OPCODE_DUP:
 			return opcode_dup;
+		case OPCODE_NEW:
+			return opcode_new;
 		case OPCODE_DROP:
 			return opcode_drop;
 		case OPCODE_SWAP:
 			return opcode_swap;
+		case OPCODE_RSTORE:
+			return opcode_rstore;
+		case OPCODE_RLOAD:
+			return opcode_rload;
 		default: // nop
 			return opcode_nop;
 	}
@@ -171,7 +195,22 @@ static void print_stackvalue(int sp, const stackvalue *sv)
 				case opcode_swap:
 					printf("SWAP\n");
 					return;
+				case opcode_new:
+					printf("NEW\n");
+					return;
+				case opcode_rstore:
+					printf("RSTORE\n");
+					return;
+				case opcode_rload:
+					printf("RLOAD\n");
+					return;
 			}
+		case valuetype_reference:
+			printf("REF %d of %d at %p\n",
+					sv->value.ref_value.reference_id,
+					sv->value.ref_value.mem_size,
+					sv->value.ref_value.allocated_object);
+			return;
 		default:
 			printf("<unknown>\n");
 			return;
@@ -200,8 +239,11 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 		case OPCODE_LE:
 		case OPCODE_EQ:
 		case OPCODE_DUP:
+		case OPCODE_NEW:
 		case OPCODE_SWAP:
 		case OPCODE_DROP:
+		case OPCODE_RSTORE:
+		case OPCODE_RLOAD:
 		case OPCODE_NOP:
 			sv->vt = valuetype_opcode;
 			sv->value.op = opcode_to_enum(buf[*pc]);
@@ -278,8 +320,7 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			if(sv->value.intvalue < -return_points[return_depth].fp ||
 					sv->value.intvalue > *sp - return_points[return_depth].fp + 1)
 				return 1;
-			sv->value.intvalue = stack[sv->value.intvalue + return_points[return_depth].fp].value.intvalue;
-			dprintf("Load %d; fp: %d; sp: %d\n", sv->value.intvalue, return_points[return_depth].fp, *sp);
+			*sv = stack[sv->value.intvalue + return_points[return_depth].fp];
 			return 0;
 
 	return 0;
@@ -341,9 +382,12 @@ static int interpret_arith_opcode(const stackvalue *sv, stackvalue *stack, int *
 			dprintf("[%d] %d == %d = %d\n", *sp, i2, i1, stack[*sp - 1].value.intvalue);
 			break;
 		case opcode_dup:
+		case opcode_new:
 		case opcode_drop:
 		case opcode_nop:
 		case opcode_swap:
+		case opcode_rstore:
+		case opcode_rload:
 			break;
 	}
 	return 0;
@@ -394,6 +438,110 @@ static int interpret_swap(const stackvalue *sv, stackvalue *stack, int *sp)
 	return 0;
 }
 
+static void panic(const char *msg)
+{
+	fprintf(stderr, "%s\n", msg);
+	exit(1);
+}
+
+static stackvalue new_object(int size)
+{
+	stackvalue tmp;
+	tmp.vt = valuetype_reference;
+	tmp.value.ref_value.reference_id = next_reference_id++;
+	tmp.value.ref_value.mem_size = size;
+	tmp.value.ref_value.allocated_object = malloc(size);
+	if(!tmp.value.ref_value.allocated_object) {
+		panic("no memory available");
+	}
+	objects[tmp.value.ref_value.reference_id] = tmp;
+	return tmp;
+}
+
+static int interpret_new(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 1) {
+		fprintf(stderr, "NEW with empty stack\n");
+		return 1;
+	}
+	stack[*sp - 1] = new_object(stack[*sp - 1].value.intvalue);
+	dprintf("[%d] NEW %d (%p) of size %d\n", *sp, 
+			stack[*sp].value.ref_value.reference_id,
+			stack[*sp].value.ref_value.allocated_object,
+			stack[*sp].value.ref_value.mem_size);
+	return 0;
+}
+
+static stackvalue *get_obj(int32_t ref_id)
+{
+	if(ref_id < 0 || ref_id >= MAX_NUM_OBJECTS)
+		return NULL;
+	if(objects[ref_id].vt != valuetype_reference)
+		return NULL;
+	return &objects[ref_id];
+}
+
+static int interpret_rstore(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 3) {
+		fprintf(stderr, "RSTORE with not enough elements in stack\n");
+		return 1;
+	}
+	if(stack[*sp - 3].vt != valuetype_reference) {
+		fprintf(stderr, "RSTORE without reference\n");
+		return 1;
+	}
+	if(stack[*sp - 2].vt != valuetype_int ||
+			stack[*sp - 2].value.intvalue < 0 ||
+			stack[*sp - 2].value.intvalue >= stack[*sp - 3].value.ref_value.mem_size ||
+			stack[*sp - 2].value.intvalue % 4 != 0) {
+		fprintf(stderr, "RSTORE without valid address\n");
+		return 1;
+	}
+	if(stack[*sp - 1].vt != valuetype_int) {
+		fprintf(stderr, "RSTORE without value\n");
+	}
+	stackvalue *obj = get_obj(stack[*sp - 3].value.ref_value.reference_id);
+	if(!obj) {
+		fprintf(stderr, "RSTORE without valid reference\n");
+		return 1;
+	}
+	int *value_pointer = obj->value.ref_value.allocated_object + stack[*sp - 2].value.intvalue;
+	*value_pointer = stack[*sp - 1].value.intvalue;
+	*sp -= 3;
+	return 0;
+}
+
+static int interpret_rload(const stackvalue *sv, stackvalue *stack, int *sp)
+{
+	if(*sp < 2) {
+		fprintf(stderr, "RLOAD with not enough elements in stack\n");
+		return 1;
+	}
+	if(stack[*sp - 2].vt != valuetype_reference) {
+		fprintf(stderr, "RLOAD without reference\n");
+		return 1;
+	}
+	if(stack[*sp - 1].vt != valuetype_int ||
+			stack[*sp - 1].value.intvalue < 0 ||
+			stack[*sp - 1].value.intvalue >= stack[*sp - 2].value.ref_value.mem_size ||
+			stack[*sp - 1].value.intvalue % 4 != 0) {
+		fprintf(stderr, "RLOAD without valid address\n");
+		return 1;
+	}
+	stackvalue *obj = get_obj(stack[*sp - 2].value.ref_value.reference_id);
+	if(!obj) {
+		fprintf(stderr, "RLOAD without valid reference\n");
+		return 1;
+	}
+	int *value_pointer = obj->value.ref_value.allocated_object + stack[*sp - 1].value.intvalue;
+	*sp -= 2;
+	stack[*sp].vt = valuetype_int;
+	stack[*sp].value.intvalue = *value_pointer;
+	(*sp)++;
+	return 0;
+}
+
 static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 {
 	switch(sv->vt) {
@@ -419,7 +567,17 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 					return 0;
 				case opcode_swap:
 					return interpret_swap(sv, stack, sp);
+				case opcode_new:
+					return interpret_new(sv, stack, sp);
+				case opcode_rstore:
+					return interpret_rstore(sv, stack, sp);
+				case opcode_rload:
+					return interpret_rload(sv, stack, sp);
 			}
+		case valuetype_reference:
+			stack[*sp] = *sv;
+			(*sp)++;
+			return 0;
 		default:
 			return 1;
 	}
