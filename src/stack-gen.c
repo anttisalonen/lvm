@@ -132,6 +132,15 @@ int main(int argc, char **argv)
 		else if(!strncmp(buf, "SWAP", 4)) {
 			output(OPCODE_SWAP);
 		}
+		else if(!strncmp(buf, "NEW", 3)) {
+			output(OPCODE_NEW);
+		}
+		else if(!strncmp(buf, "RSTORE", 6)) {
+			output(OPCODE_RSTORE);
+		}
+		else if(!strncmp(buf, "RLOAD", 4)) {
+			output(OPCODE_RLOAD);
+		}
 		else if(!strncmp(buf, "BR ", 3)) {
 			int succ;
 			long int parsed_num = getnum(buf + 3, &succ);
