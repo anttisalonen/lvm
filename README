@@ -1,0 +1,12 @@
+LVM
+===
+
+Introduction
+------------
+
+LVM is a simple, small, stack-based virtual machine.
+
+A compiler for simple, small language called Stau is included as well,
+which compiles to LVM bytecode.
+
+LVM is licensed under GPLv3. See LICENSE for more information.
