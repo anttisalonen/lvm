@@ -1,3 +1,4 @@
+dotprod3 :: Int -> Int -> Int -> Int -> Int -> Int -> Int
 dotprod3 x1 y1 z1 x2 y2 z2 = x1 * x2 + y1 * y2 + z1 * z2
 
 main = dotprod3 1 2 3 4 (-5) 6

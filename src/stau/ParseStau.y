@@ -5,6 +5,7 @@ module ParseStau where
 import Control.Monad.Error
 
 import Data.Char
+import Data.Either
 
 import Stau
 }
@@ -40,20 +41,33 @@ import Stau
       '('             { TokenOB }
       ')'             { TokenCB }
       '\n'            { TokenEndline }
+      '->'            { TokenFunctionType }
+      '::'            { TokenTypeOf }
 %%
 
-Functions :: { [Function] }
-Functions : Functions '\n' Function { $3 : $1 }
-          | Functions '\n'          { $1 }
-          | Function                { [$1] }
-          | {- empty -}             { [] }
+ModuleDecls :: { ([Function], [FunSig]) }
+ModuleDecls : ModuleDecls '\n' ModuleDecl { concatEithers $1 $3 }
+            | ModuleDecls '\n'            { $1 }
+            | ModuleDecl                  { partitionEithers [$1] }
+            | {- empty -}                 { ([], []) }
+
+ModuleDecl :: { Either Function FunSig }
+ModuleDecl : FunDecl { Left $1 }
+	   | FunSig  { Right $1 }
 
 Vars :: { [String] }
 Vars : var Vars { $1 : $2 }
      | var      { [$1] }
 
-Function :: { Function }
-Function : Vars '=' Exp { Function (head $1) (tail $1) $3 }
+FunSig :: { FunSig }
+FunSig : var '::' Types { FunSig $1 $3 }
+
+Types :: { [String] }
+Types : var '->' Types { $1 : $3 }
+      | var            { [$1] }
+
+FunDecl :: { Function }
+FunDecl : Vars '=' Exp { Function (head $1) (tail $1) $3 }
 
 Atoms :: { [Exp] }
 Atoms : {- empty -} { [] }
@@ -79,6 +93,10 @@ Atom : int %prec VAR { Int $1 }
 
 {
 
+concatEithers :: ([a], [b]) -> Either a b -> ([a], [b])
+concatEithers (as, bs) (Left a)  = (a:as, bs)
+concatEithers (as, bs) (Right b) = (as, b:bs)
+
 parseError :: [Token] -> Either String a
 parseError ts = Left $ "Parse error: " ++ show (ts)
 
@@ -99,6 +117,8 @@ stauLexer (c:cs)
       | isDigit c = lexNum (c:cs)
 stauLexer ('=':'=':cs) = comb cs TokenCmpEq
 stauLexer ('<':'=':cs) = comb cs TokenCmpLe
+stauLexer ('-':'>':cs) = comb cs TokenFunctionType
+stauLexer (':':':':cs) = comb cs TokenTypeOf
 stauLexer ('<':cs) = comb cs TokenCmpLt
 stauLexer ('=':cs) = comb cs TokenEq
 stauLexer ('+':cs) = comb cs TokenPlus

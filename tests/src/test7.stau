@@ -1,2 +1,4 @@
-f = if 1 then 2 else 3
-main = if 0 then 4 else 5
+f :: Int
+f = if True then 2 else 3
+
+main = if False then 4 else 5

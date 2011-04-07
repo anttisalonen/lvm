@@ -2,10 +2,17 @@ module Stau
 where
 
 data Function = Function { 
-  getFunName :: String,
-  getFunArgs :: [String],
-  getFunExp :: Exp }
-      deriving Show
+    getFunName :: String
+  , getFunArgs :: [String]
+  , getFunExp  :: Exp 
+  }
+    deriving (Show)
+
+data FunSig = FunSig {
+    getFunSigName  :: String
+  , getFunSigTypes :: [String]
+  }
+  deriving (Show)
 
 data Exp
       = Plus Exp Exp 
@@ -20,7 +27,7 @@ data Exp
       | Brack Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp
-      deriving Show
+    deriving (Show)
 
 data Token
       = TokenInt Int
@@ -39,6 +46,8 @@ data Token
       | TokenOB
       | TokenCB
       | TokenEndline
- deriving Show
+      | TokenFunctionType
+      | TokenTypeOf
+    deriving (Show)
 
 
