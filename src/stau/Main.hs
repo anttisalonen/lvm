@@ -140,7 +140,7 @@ expTypeNumeric :: TypeMap -> Exp -> Exp -> Either String ExpType
 expTypeNumeric em e1 e2 = do
   et1 <- expType em e1
   guardE (Right et1 == expType em e2) $ varTypeError "numeric types" em e1 e2
-  -- guardE (isNumericType et1) $ "Not a numeric type: " ++ showExpType em e1
+  guardE (isNumericType et1) $ "Not a numeric type: " ++ showExpType em e1
   return et1
 
 compTypeError :: TypeMap -> Exp -> Exp -> String
