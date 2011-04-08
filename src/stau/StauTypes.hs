@@ -1,7 +1,7 @@
 module StauTypes
 where
 
-{- The definitions needed by Main and TypeCheck. -}
+{- The definitions needed by Asm and TypeCheck. -}
 
 import Data.List
 import qualified Data.Map as M
