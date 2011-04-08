@@ -1,6 +1,8 @@
 module Stau
 where
 
+{- Here are the definitions that are needed by the parser. -}
+
 data Function = Function { 
     getFunName :: String
   , getFunArgs :: [String]

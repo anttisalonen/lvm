@@ -33,16 +33,16 @@ $(STAUDIR)/ParseStau.hs: $(STAUDIR)/ParseStau.y
 	$(HAPPY) -o $@ $<
 
 $(BINDIR)/stau: $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hs
-	$(HC) $(HFLAGS) -o $(BINDIR)/stau $(STAUDIR)/ParseStau.hs $(STAUDIR)/Stau.hs $(STAUDIR)/Main.hs
+	$(HC) $(HFLAGS) -o $(BINDIR)/stau $(STAUDIR)/*.hs
 
 $(TESTSCORRECTBINDIR):
-	mkdir -p $(TESTSCORRECTBINDIR)
+	@mkdir -p $(TESTSCORRECTBINDIR)
 
 $(TESTSTYPEERRORBINDIR):
-	mkdir -p $(TESTSTYPEERRORBINDIR)
+	@mkdir -p $(TESTSTYPEERRORBINDIR)
 
 $(BINDIR):
-	mkdir -p $(BINDIR)
+	@mkdir -p $(BINDIR)
 
 tests: correct-tests type-error-tests
 
