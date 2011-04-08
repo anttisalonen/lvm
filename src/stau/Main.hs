@@ -9,6 +9,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error()
+import System.IO
 import System.Exit
 import System.Environment
 import System.Console.GetOpt
@@ -32,8 +33,11 @@ options = [
   , Option ['a'] []                (NoArg  (\o -> o{showAST = True}))                   "show AST"
   ]
 
+putErrLn :: String -> IO ()
+putErrLn = hPutStrLn stderr
+
 boom :: String -> IO ()
-boom errMsg = putStrLn errMsg >> exitWith (ExitFailure 1)
+boom errMsg = putErrLn errMsg >> exitWith (ExitFailure 1)
 
 main :: IO ()
 main = do
@@ -41,16 +45,16 @@ main = do
     let (actions, nonopts, errs) = getOpt Permute options args
         opts = foldl' (flip ($)) defaultOptions actions
     when (not (null errs) || length nonopts /= 1 || null (outputfile opts)) $ do
-        mapM_ putStrLn errs
+        mapM_ putErrLn errs
         pr <- getProgName
-        putStrLn $ usageInfo ("Usage: " ++ pr ++ " <options> <input file>") options
+        putErrLn $ usageInfo ("Usage: " ++ pr ++ " <options> <input file>") options
         exitWith (ExitFailure 1)
     let ifile = head nonopts
         ofile = outputfile opts
     input <- readFile ifile
     let eAst = getAST input
     case eAst of
-      Left  err -> putStrLn err >> exitWith (ExitFailure 1)
+      Left  err -> boom err
       Right ast -> do
         when (showAST opts) $ putStrLn ((intercalate "\n" . map show) $ fst ast)
         case checkSigs ast of
