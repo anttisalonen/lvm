@@ -1,0 +1,5 @@
+f :: Int -> Int
+f x = x + True
+
+main = f 5
+
