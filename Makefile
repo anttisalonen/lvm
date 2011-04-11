@@ -52,7 +52,8 @@ runtests = \
 		rm -f $(2)/result-`basename $$file .stau`.txt; \
 		$(BINDIR)/stau -o $(2)/`basename $$file .stau` $$file 2>/dev/null && \
 		$(BINDIR)/stack-gen < $(2)/`basename $$file .stau` | \
-			$(BINDIR)/stack - > $(2)/result-`basename $$file .stau`.txt; \
+			$(BINDIR)/stack - 2>&1 | sed -e 's/ at 0x[0-9a-f]*/ at 0xdeadbeef/' > \
+				$(2)/result-`basename $$file .stau`.txt; \
 		echo $$? >> $(2)/result-`basename $$file .stau`.txt; \
 		(cmp $(2)/result-`basename $$file .stau`.txt \
 			$(1)/correct-`basename $$file .stau`.txt >/dev/null 2>&1 && \
