@@ -33,6 +33,9 @@ data Opcode = OpInt Int
             | OpBr Int
             | OpBrNz Int
             | OpLoad Int
+            | OpNew
+            | OpRStore
+            | OpRLoad
 
 addLF :: String -> String
 addLF = (++ "\n")
@@ -58,10 +61,28 @@ instance Show Opcode where
   show (OpBr i)      = addLF $ "BR " ++ show i
   show (OpBrNz i)    = addLF $ "BRNZ " ++ show i
   show (OpLoad i)    = addLF $ "LOAD " ++ show i
+  show OpNew         = addLF $ "NEW"
+  show OpRStore      = addLF $ "RSTORE"
+  show OpRLoad       = addLF $ "RLOAD"
 
-generateAssembly :: [Function] -> [Opcode]
-generateAssembly fns = evalState (generateAssembly' fns) $ CompileState 0 0 0 fm preludeVariables
+generateAssembly :: Module -> [Opcode]
+generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 fm 
+                              (valueMapToVariableMap preludeVariables) dsz
   where fm = createFunctionMap fns
+        fns = moduleFunctions ast
+        dsz = createDataSizeMap (moduleDataDecls ast)
+
+valueMapToVariableMap :: ValueMap -> VariableMap
+valueMapToVariableMap = M.map valueToVariable
+
+valueToVariable :: Value -> AsmVariable
+valueToVariable (StackValue i _) = StackVariable i
+valueToVariable (ExpValue e _)   = ExpVariable e
+
+createDataSizeMap :: [DataDecl] -> M.Map String Int
+createDataSizeMap ds =
+  let constructors = concatMap dataConstructors ds
+  in M.fromList (zip (map constructorName constructors) (map ((*4) . length . dataFieldTypes) constructors))
 
 generateAssembly' :: [Function] -> State CompileState [Opcode]
 generateAssembly' fns = 
@@ -72,14 +93,36 @@ data CompileState = CompileState {
   , numVars :: Int
   , minVars :: Int
   , functions :: FunctionMap
-  , variables :: ValueMap
+  , variables :: VariableMap
+  , datasizes :: M.Map String Int
   }
+
+type VariableMap = M.Map String AsmVariable
+
+data AsmVariable = StackVariable Int
+                 | ExpVariable Exp
+                 | RefVariable [(Int, Int)]
+
+getFunParamVars :: Function -> [(String, AsmVariable)]
+getFunParamVars f =
+  getParamVars $ getFunArgs f
+
+getParamVars :: [ParamDecl] -> [(String, AsmVariable)]
+getParamVars ps = concatMap (uncurry getParamVar) (zip [1..] ps)
+
+getParamVar :: Int -> ParamDecl -> [(String, AsmVariable)]
+getParamVar num (VariableParam name)    = [(name, StackVariable num)]
+getParamVar num (ConstructorParam _ ps) = concatMap (uncurry (getConsParamVar num)) (zip [0, 4..] ps)
+
+getConsParamVar :: Int -> Int -> ParamDecl -> [(String, AsmVariable)]
+getConsParamVar stp addr (VariableParam name)    = [(name, RefVariable [(stp, addr)])]
+getConsParamVar stp _    (ConstructorParam _ ps) = concatMap (uncurry (getConsParamVar stp)) (zip [0, 4..] ps)
 
 genFunctionAsm :: Function -> State CompileState [Opcode]
 genFunctionAsm f = do
   fm <- functions <$> get
   let numArgs = length $ getFunArgs f
-      paramMap = M.fromList $ zip (getFunArgs f) (map (flip StackValue TypeInt) [1..])
+      paramMap = M.fromList (getFunParamVars f)
   modify $ \c -> c{numVars = numArgs, minVars = numArgs}
   modify $ \c -> c{variables = (variables c) `M.union` paramMap}
   fd <- addOp $ OpFunDef (fm M.! getFunName f)
@@ -124,9 +167,7 @@ genExprAsm (FunApp fn eps) = do
       vars <- variables <$> get
       case M.lookup fn vars of
         Nothing -> error $ "Variable \"" ++ fn ++ "\" not defined"
-        Just (StackValue v _) -> do
-          addOp (OpLoad (-v)) >>= return . (:[])
-        Just (ExpValue e _)   -> genExprAsm e
+        Just v  -> genVarAsm v
     else do
       params <- concat <$> mapM genExprAsm (reverse eps)
       fm <- functions <$> get
@@ -136,11 +177,41 @@ genExprAsm (FunApp fn eps) = do
                    addOp $ OpFunCall i
       return $ params ++ [fcall]
 
+genExprAsm (DataCons consname exps) = do
+  dataszs <- datasizes <$> get
+  case M.lookup consname dataszs of
+                   Nothing       -> do
+                     vars <- variables <$> get
+                     case M.lookup consname vars of
+                       Nothing -> error $ "Internal compiler error during code generation: undeclared data constructor " ++ consname
+                       Just v  -> genVarAsm v
+                   Just datasize -> do
+                     osz <- addOp $ OpInt datasize
+                     onew <- addOp OpNew
+                     params <- forM (zip [0..] exps) $ \(i, e) -> do
+                       odup <- addOp OpDup
+                       oidx <- addOp $ OpInt $ i * 4
+                       ea <- genExprAsm e
+                       ost <- addOp OpRStore
+                       return $ [odup, oidx] ++ ea ++ [ost]
+                     return $ [osz, onew] ++ concat params
+
 genExprAsm (CmpLt e1 e2) = genArithAsm OpLT e1 e2
 genExprAsm (CmpLe e1 e2) = genArithAsm OpLE e1 e2
 genExprAsm (CmpEq e1 e2) = genArithAsm OpEQ e1 e2
 genExprAsm (Negate (Int i)) = addVar >> sequence [addOp $ OpInt (-i)]
 genExprAsm (Negate n)       = genArithAsm OpMul (Int (-1)) n
+
+genVarAsm :: AsmVariable -> State CompileState [Opcode]
+genVarAsm (StackVariable v) = do
+  addOp (OpLoad (-v)) >>= return . (:[])
+genVarAsm (ExpVariable e)   = genExprAsm e
+genVarAsm (RefVariable rs)  =
+  concat <$> (forM rs $ \(stp, addr) -> do
+    st <- addOp $ OpLoad (-stp)
+    ad <- addOp $ OpInt addr
+    rl <- addOp $ OpRLoad
+    return [st, ad, rl])
 
 addVar, rmVar :: State CompileState ()
 addVar = addVars 1
@@ -183,6 +254,9 @@ opLength (OpFunCall _) = 5
 opLength (OpBr _)      = 5
 opLength (OpBrNz _)    = 5
 opLength (OpLoad _)    = 5
+opLength OpNew         = 1
+opLength OpRStore      = 1
+opLength OpRLoad       = 1
 
 createFunctionMap :: [Function] -> M.Map String Int
 createFunctionMap = M.adjust (const 1) "main" . fst . foldl' go (M.empty, 2)

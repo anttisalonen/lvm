@@ -18,12 +18,14 @@ type ValueMap = M.Map String Value
 
 data ExpType = TypeInt
              | TypeBool
+             | CustomType String
              | TypeFun [ExpType]
   deriving (Eq)
 
 instance Show ExpType where
   show TypeInt  = "Int"
   show TypeBool = "Bool"
-  show (TypeFun es) = intercalate " -> " (map show es)
+  show (CustomType n) = n
+  show (TypeFun es)   = intercalate " -> " (map show es)
 
 

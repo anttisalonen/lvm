@@ -2,6 +2,7 @@ module TypeCheck(typeCheck)
 where
 
 import Data.Function
+import Data.List
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad
@@ -10,49 +11,96 @@ import Control.Monad.Error()
 import Stau
 import StauTypes
 
-typeCheck :: ([Function], [FunSig]) -> Either String ()
-typeCheck ast =
-  case checkSigs ast of
+typeCheck :: Module -> Either String ()
+typeCheck ast = do
+  let datadeclset   = S.fromList (map dataDeclName (moduleDataDecls ast))
+  case checkSigs datadeclset ast of
     Left err        -> Left $ "Type signature error: " ++ err
     Right funsigmap -> do
       let topLevelTypes = valueMapToTypeMap preludeVariables `M.union` funsigmap
-          funsigmap' = M.insert "main" (TypeFun []) funsigmap
-      forM_ (fst ast) $ \f -> do
-        case M.lookup (getFunName f) funsigmap' of
-          Nothing  -> Left $ "Type signature for function `" ++ getFunName f ++ "' not found"
-          Just sig ->
-            case expType (topLevelTypes `M.union` paramTypes f sig) (getFunExp f) of
-              Left err -> Left $ "Type error in function `" ++ getFunName f ++ "': " ++ err
-              Right _  -> return ()
+          funsigmap'    = M.insert "main" (TypeFun []) funsigmap
+          datamap       = M.map dataDeclName $ buildMultiMaps (map constructorName . dataConstructors) (moduleDataDecls ast)
+      case buildConsMap ast of
+        Left err      -> Left $ "Data type error: " ++ err
+        Right consmap -> do
+        forM_ (moduleFunctions ast) $ \f -> do
+          case M.lookup (getFunName f) funsigmap' of
+            Nothing  -> Left $ "Type signature for function `" ++ getFunName f ++ "' not found"
+            Just sig ->
+              case paramTypes datamap datadeclset consmap f sig of
+                Left err -> Left $ "Parameter declaration error for function `" ++ getFunName f ++ "': " ++ err
+                Right pr ->
+                  case expType (topLevelTypes `M.union` pr) (getFunExp f) of
+                    Left err -> Left $ "Type error in function `" ++ getFunName f ++ "': " ++ err
+                    Right _  -> return ()
 
-checkSigs :: ([Function], [FunSig]) -> Either String TypeMap
-checkSigs (funs, sigs) =
+buildMultiMaps :: (Ord b) => (a -> [b]) -> [a] -> M.Map b a
+buildMultiMaps fetch src = M.unions (map (buildMultiMap fetch) src)
+
+buildMultiMap :: (Ord b) => (a -> [b]) -> a -> M.Map b a
+buildMultiMap fetch src = M.fromList (zip (fetch src) (repeat src))
+
+buildConsMap :: Module -> Either String (M.Map String Constructor)
+buildConsMap ast =
+  let conss = concatMap dataConstructors $ moduleDataDecls ast
+      consids = map constructorName conss
+      consmap = M.fromList $ zip consids conss
+  in case findDups consids of
+       [] -> Right consmap
+       ns -> Left $ "Duplicate data constructor definitions: " ++ (intercalate "\n" $ map show ns)
+
+findDups :: (Ord a) => [a] -> [a]
+findDups = map head . filter (\l -> length l > 1) . group . sort
+
+checkSigs :: S.Set String -> Module -> Either String TypeMap
+checkSigs datadeclset (Module funs sigs _) =
   let funset = S.fromList (map getFunName funs)
       sigset = S.fromList (map getFunSigName sigs)
   in if sigset `S.isProperSubsetOf` funset
-       then case funSigTypes sigs of
+       then case funSigTypes datadeclset sigs of
               Left err -> Left $ "Invalid type signature: " ++ err
               Right tm -> return tm
        else Left $ "Type signature without a function"
 
-funSigTypes :: [FunSig] -> Either String TypeMap
-funSigTypes fs = do
-  allSigs <- mapM funSigType fs
+funSigTypes :: S.Set String -> [FunSig] -> Either String TypeMap
+funSigTypes datadeclset fs = do
+  allSigs <- mapM (funSigType datadeclset) fs
   return $ M.fromList $ zip (map getFunSigName fs) allSigs
 
-funSigType :: FunSig -> Either String ExpType
-funSigType (FunSig _ typenames) = do
-  types <- mapM getTypeByName typenames
+funSigType :: S.Set String -> FunSig -> Either String ExpType
+funSigType datadeclset (FunSig _ typenames) = do
+  types <- mapM (getTypeByName datadeclset) typenames
   return $ TypeFun types
 
-paramTypes :: Function -> ExpType -> TypeMap
-paramTypes fun (TypeFun types)      = M.fromList $ zip (getFunArgs fun) types
-paramTypes _   _                    = M.empty
+paramTypes :: M.Map String String -> S.Set String -> M.Map String Constructor -> Function -> ExpType -> Either String TypeMap
+paramTypes _ _ _ _ (TypeFun []) = Right M.empty -- main
+paramTypes datamap datadeclset consmap fun (TypeFun types) = liftM M.fromList (paramTypes' (getFunArgs fun) (init types))
+  where paramTypes' :: [ParamDecl] -> [ExpType] -> Either String [(String, ExpType)]
+        paramTypes' [] [] = Right []
+        paramTypes' xs [] = Left $ "Not enough parameter declarations: " ++ show xs
+        paramTypes' [] _  = Left $ "Too many parameter declarations"
+        paramTypes' (VariableParam n : params)         (et:ets) = do
+          let this = (n, et)
+          rest <- paramTypes' params ets
+          return (this : rest)
+        paramTypes' (ConstructorParam dc cps : params) (et:ets)  =
+          case M.lookup dc consmap of
+            Nothing                  -> Left $ "Unknown data constructor: `" ++ dc ++ "'"
+            Just (Constructor _ dft) -> do
+              constypes <- mapM (getTypeByName datadeclset) dft
+              guardE (Just (show et) == M.lookup (show et) datamap) $ "Data type `" ++ show et ++ "' does not match constructor `" ++ dc ++ "'"
+              this <- paramTypes' cps $ constypes
+              rest <- paramTypes' params ets
+              return (this ++ rest)
+paramTypes _ _ _ _ _ = Left $ "Internal compiler error in paramTypes"
 
-getTypeByName :: String -> Either String ExpType
-getTypeByName "Int"  = Right TypeInt
-getTypeByName "Bool" = Right TypeBool
-getTypeByName n      = Left $ "Invalid type name: `" ++ n ++ "'"
+getTypeByName :: S.Set String -> String -> Either String ExpType
+getTypeByName _           "Int"  = Right TypeInt
+getTypeByName _           "Bool" = Right TypeBool
+getTypeByName datadeclset n      = 
+  if S.member n datadeclset
+    then Right (CustomType n)
+    else Left $ "Invalid type name: `" ++ n ++ "'"
 
 valueMapToTypeMap :: ValueMap -> TypeMap
 valueMapToTypeMap = M.map valueToType
@@ -100,7 +148,7 @@ expType em (CmpLt e1 e2) = guardE (on (==) (expType em) e1 e2) (compTypeError em
 expType em (CmpLe e1 e2) = guardE (on (==) (expType em) e1 e2) (compTypeError em e1 e2) >> Right TypeBool
 expType _  (Int _) = Right TypeInt
 expType em (FunApp n params) = case M.lookup n em of
-                                 Nothing -> Left $ "Type error on variable: `" ++ n ++ "'"
+                                 Nothing -> Left $ "Unknown variable: `" ++ n ++ "'"
                                  Just (TypeFun expectedParams) ->
                                    let numparams = length params
                                        numExpectedParams = length expectedParams - 1
@@ -117,6 +165,11 @@ expType em (FunApp n params) = case M.lookup n em of
                                  Just e -> if null params
                                              then Right e
                                              else Left $ "Function application on non-function `" ++ n ++ "'"
+expType em (DataCons n params) = do
+  mapM_ (expType em) params
+  case M.lookup n em of
+    Nothing -> Right (CustomType n)
+    Just r  -> Right r
 expType em (Brack e) = expType em e
 expType em (Negate e) = do
   et <- expType em e

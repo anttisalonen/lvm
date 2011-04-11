@@ -53,19 +53,22 @@ main = do
     case eAst of
       Left  err -> boom err
       Right ast -> do
-        when (showAST opts) $ putStrLn ((intercalate "\n" . map show) $ fst ast)
+        when (showAST opts) $ do
+          putStrLn ((intercalate "\n" . map show) $ moduleDataDecls ast)
+          putStrLn ((intercalate "\n" . map show) $ moduleSignatures ast)
+          putStrLn ((intercalate "\n" . map show) $ moduleFunctions ast)
         case typeCheck ast of
           Left err -> boom $ "Type error: " ++ err
           Right _  -> return ()
 
-        case compile (fst ast) of
+        case compile ast of
           Right res -> writeFile ofile res
           Left err  -> boom err
 
-getAST :: String -> Either String ([Function], [FunSig])
+getAST :: String -> Either String Module
 getAST s = stauLexer s >>= parseStau
 
-compile :: [Function] -> Either String String
+compile :: Module -> Either String String
 compile = return . concatMap show . generateAssembly
 
 

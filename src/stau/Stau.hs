@@ -1,19 +1,50 @@
 module Stau
 where
 
+import Data.Monoid
+
 {- Here are the definitions that are needed by the parser. -}
+
+data Module = Module {
+    moduleFunctions  :: [Function]
+  , moduleSignatures :: [FunSig]
+  , moduleDataDecls  :: [DataDecl]
+  }
+  deriving (Show)
+
+instance Monoid Module where
+  m1 `mappend` m2 = Module (moduleFunctions m1 `mappend` moduleFunctions m2)
+                           (moduleSignatures m1 `mappend` moduleSignatures m2)
+                           (moduleDataDecls m1 `mappend` moduleDataDecls m2)
+  mempty = Module mempty mempty mempty
 
 data Function = Function { 
     getFunName :: String
-  , getFunArgs :: [String]
+  , getFunArgs :: [ParamDecl]
   , getFunExp  :: Exp 
   }
-    deriving (Show)
+  deriving (Show)
 
 data FunSig = FunSig {
     getFunSigName  :: String
   , getFunSigTypes :: [String]
   }
+  deriving (Show)
+
+data DataDecl = DataDecl {
+    dataDeclName     :: String
+  , dataConstructors :: [Constructor]
+  }
+  deriving (Show)
+
+data Constructor = Constructor {
+    constructorName :: String
+  , dataFieldTypes  :: [String]
+  }
+  deriving (Show)
+
+data ParamDecl = VariableParam String
+               | ConstructorParam String [ParamDecl]
   deriving (Show)
 
 data Exp
@@ -26,14 +57,16 @@ data Exp
       | CmpLe Exp Exp 
       | Int Int 
       | FunApp String [Exp]
+      | DataCons String [Exp]
       | Brack Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp
-    deriving (Show)
+  deriving (Show)
 
 data Token
       = TokenInt Int
       | TokenVar String
+      | TokenTypeName String
       | TokenEq
       | TokenPlus
       | TokenMinus
@@ -50,6 +83,9 @@ data Token
       | TokenEndline
       | TokenFunctionType
       | TokenTypeOf
-    deriving (Show)
+      | TokenPipe
+      | TokenData
+      | TokenCons String
+  deriving (Show)
 
 
