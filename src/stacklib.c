@@ -102,26 +102,41 @@ static int is_reference(int32_t i)
 	return (i & REF_ID_MASK) == REF_ID_MASK;
 }
 
+static void print_intvalue(int val, unsigned int indent)
+{
+	if(indent > 70)
+		return;
+	int spaces;
+	for(spaces = 0; spaces < indent; spaces++)
+		fputc(' ', stderr);
+	if(is_reference(val)) {
+		reference *ref = get_obj(int_to_ref_id(val));
+		if(!ref) {
+			fprintf(stderr, "REF invalid\n");
+		}
+		else {
+			int i;
+			fprintf(stderr, "REF %d of %d at %p\n",
+					ref->reference_id.id,
+					ref->mem_size,
+					ref->allocated_object);
+			for(i = 0; i < ref->mem_size / 4; i++) {
+				int *value = ref->allocated_object;
+				print_intvalue(value[i], indent + 4);
+			}
+		}
+	}
+	else {
+		fprintf(stderr, "INT %d\n", val);
+	}
+}
+
 static void print_stackvalue(int sp, const stackvalue *sv)
 {
 	fprintf(stderr, "[%d] ", sp);
 	switch(sv->vt) {
 		case valuetype_int:
-			if(is_reference(sv->value.intvalue)) {
-				reference *ref = get_obj(int_to_ref_id(sv->value.intvalue));
-				if(!ref) {
-					fprintf(stderr, "REF invalid\n");
-				}
-				else {
-					fprintf(stderr, "REF %d of %d at %p\n",
-							ref->reference_id.id,
-							ref->mem_size,
-							ref->allocated_object);
-				}
-			}
-			else {
-				fprintf(stderr, "INT %d\n", sv->value.intvalue);
-			}
+			print_intvalue(sv->value.intvalue, 0);
 			return;
 		case valuetype_opcode:
 			switch(sv->value.op) {
