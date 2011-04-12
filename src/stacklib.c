@@ -56,7 +56,12 @@ typedef struct {
 
 #define MAX_NUM_FUNCTIONS 1024
 
-static int functions[MAX_NUM_FUNCTIONS];
+typedef struct {
+	int start_addr;
+	uint16_t num_params;
+} fundata;
+
+static fundata functions[MAX_NUM_FUNCTIONS];
 
 #define MAX_NUM_OBJECTS 1024
 static reference objects[MAX_NUM_OBJECTS];
@@ -69,6 +74,7 @@ static int return_depth = 0;
 static struct { 
 	int ret_addr;
 	int fp;
+	int fun_number;
 } return_points[MAX_CALL_DEPTH];
 
 #define STACK_SIZE 1024
@@ -215,9 +221,9 @@ static int get_int(const char *buf, int *pc, stackvalue *sv)
 {
 	sv->vt = valuetype_int;
 	sv->value.intvalue = (buf[*pc]) & 0x7f;
-	sv->value.intvalue += (buf[*pc + 1]) << 8;
-	sv->value.intvalue += (buf[*pc + 2]) << 16;
-	sv->value.intvalue += (buf[*pc + 3]) << 24;
+	sv->value.intvalue += (buf[*pc + 1]) << 7;
+	sv->value.intvalue += (buf[*pc + 2]) << 15;
+	sv->value.intvalue += (buf[*pc + 3]) << 23;
 	if(buf[*pc] & 0x80)
 		sv->value.intvalue = -sv->value.intvalue;
 	(*pc) += 4;
@@ -342,6 +348,20 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 					dprintf("Old sp: %d; sp: %d\n", old_sp, *sp);
 				}
 				*pc = return_points[return_depth].ret_addr;
+				int num_params = functions[return_points[return_depth].fun_number].num_params;
+				if(num_params) {
+					if(num_params <= *sp) {
+						memmove(&stack[*sp - 1 - num_params], &stack[*sp - 1],
+								num_params * sizeof(stackvalue));
+						*sp -= num_params;
+					}
+					else {
+						dprintf("Function %d has %d parameters - but "
+							"only %d elements in stack!\n",
+							return_points[return_depth].fun_number,
+							num_params, *sp);
+					}
+				}
 				return_depth--;
 			}
 			*interp = 0;
@@ -358,7 +378,8 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			return_depth++;
 			return_points[return_depth].ret_addr = *pc;
 			return_points[return_depth].fp = *sp;
-			*pc = functions[sv->value.intvalue - 1];
+			return_points[return_depth].fun_number = sv->value.intvalue - 1;
+			*pc = functions[sv->value.intvalue - 1].start_addr;
 			return 0;
 		case OPCODE_BRANCHNZ:
 			*interp = 0;
@@ -645,7 +666,7 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 
 static int run_code(const char *buf, unsigned int bufsize)
 {
-	pc = functions[0];
+	pc = functions[0].start_addr;
 	sp = 0;
 	return_points[0].fp = 0;
 	while(pc != bufsize && pc != -1) {
@@ -670,10 +691,26 @@ static int run_code(const char *buf, unsigned int bufsize)
 	return 0;
 }
 
+static void get_unsigned_shorts(const char *buf, int *pc,
+		uint16_t *a, uint16_t *b)
+{
+	*a  = (buf[*pc]) & 0x7f;
+	*a += (buf[*pc + 1]) << 7;
+	*b  = (buf[*pc + 2]) & 0x7f;
+	*b += (buf[*pc + 3]) << 7;
+	if(buf[*pc] & 0x80)
+		*a = -*a;
+	if(buf[*(pc + 2)] & 0x80)
+		*b = -*b;
+	(*pc) += 4;
+	return;
+}
+
 static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 		int *current_fundef)
 {
-	stackvalue sv;
+	uint16_t fun_number;
+	uint16_t fun_params;
 	switch(buf[*pc]) {
 		case OPCODE_DEFUN_START:
 			if(*current_fundef) {
@@ -683,16 +720,16 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 			(*pc)++;
 			if(*pc + 4 >= bufsize)
 				return 1;
-			if(get_int(buf, pc, &sv))
+			get_unsigned_shorts(buf, pc, &fun_params, &fun_number);
+			if(fun_number >= MAX_NUM_FUNCTIONS)
 				return 1;
-			if(sv.value.intvalue >= MAX_NUM_FUNCTIONS)
+			if(fun_number <= 0)
 				return 1;
-			if(sv.value.intvalue <= 0)
+			if(functions[fun_number - 1].start_addr != 0)
 				return 1;
-			if(functions[sv.value.intvalue - 1] != 0)
-				return 1;
-			functions[sv.value.intvalue - 1] = *pc;
-			*current_fundef = sv.value.intvalue;
+			functions[fun_number - 1].start_addr = *pc;
+			functions[fun_number - 1].num_params = fun_params;
+			*current_fundef = fun_number;
 			return 0;
 		case OPCODE_DEFUN_END:
 		case OPCODE_RET0:

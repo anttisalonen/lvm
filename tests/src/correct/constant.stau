@@ -1,0 +1,5 @@
+one :: Int
+one = 1
+
+main = one
+

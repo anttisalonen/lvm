@@ -6,6 +6,19 @@
 #include "stack.h"
 #include "stacklib.h"
 
+long int get_two_nums(const char *buf, int *a, int *b)
+{
+	char *endptr;
+	*a = strtol(buf, &endptr, 0);
+	if(*endptr && *endptr == ' ') {
+		*b = strtol(endptr, &endptr, 0);
+		return !(*endptr && *endptr != '\n');
+	}
+	else {
+		return 0;
+	}
+}
+
 long int getnum(const char *buf, int *succ)
 {
 	char *endptr;
@@ -20,7 +33,7 @@ long int getnum(const char *buf, int *succ)
 	}
 }
 
-void int_to_be(long int val, char *buf)
+void num_to_be(long int val, int bytes, char *buf)
 {
 	char v = 0;
 	if(val < 0) {
@@ -30,12 +43,17 @@ void int_to_be(long int val, char *buf)
 	v |= (val & 0x7f);
 	sprintf(buf, "%c", v);
 	int i;
-	val >>= 8;
-	for(i = 1; i < 4; i++) {
+	val >>= 7;
+	for(i = 1; i < bytes; i++) {
 		v = val & 0xff;
 		buf[i] = v;
 		val >>= 8;
 	}
+}
+
+void int_to_be(long int val, char *buf)
+{
+	num_to_be(val, 4, buf);
 }
 
 static int interactive;
@@ -54,6 +72,21 @@ void output_char(char ch)
 	}
 	else {
 		fprintf(stdout, "%c", ch);
+	}
+}
+
+void output_nums(char opcode, int a, int b)
+{
+	char buf[4];
+	int i;
+	output_char(opcode);
+	num_to_be(a, 2, buf);
+	for(i = 0; i < 2; i++) {
+		output_char(buf[i]);
+	}
+	num_to_be(b, 2, buf);
+	for(i = 0; i < 2; i++) {
+		output_char(buf[i]);
 	}
 }
 
@@ -173,12 +206,12 @@ int main(int argc, char **argv)
 				fprintf(stderr, "?\n");
 			}
 			else {
-				int succ;
-				long int parsed_num = getnum(buf + 7, &succ);
+				int parsed_funnum, parsed_params;
+				int succ = get_two_nums(buf + 7, &parsed_funnum, &parsed_params);
 				if(!succ)
 					fprintf(stderr, "?\n");
 				else {
-					output_num(OPCODE_DEFUN_START, parsed_num);
+					output_nums(OPCODE_DEFUN_START, parsed_params, parsed_funnum);
 					fundef = 1;
 				}
 			}

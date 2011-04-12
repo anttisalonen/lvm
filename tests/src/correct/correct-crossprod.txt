@@ -1,7 +1,4 @@
-[1] REF 3 of 8 at 0xdeadbeef
+[0] REF 3 of 8 at 0xdeadbeef
     INT 18
     INT 20
-[0] REF 1 of 8 at 0xdeadbeef
-    INT 5
-    INT 6
 0

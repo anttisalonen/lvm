@@ -25,7 +25,7 @@ data Opcode = OpInt Int
             | OpNop
             | OpDrop
             | OpSwap
-            | OpFunDef Int
+            | OpFunDef Int Int
             | OpFunEnd
             | OpRet0
             | OpRet1
@@ -53,7 +53,7 @@ instance Show Opcode where
   show OpDup         = addLF $ "DUP"
   show OpDrop        = addLF $ "DROP"
   show OpSwap        = addLF $ "SWAP"
-  show (OpFunDef i)  = addLF $ "FUNDEF " ++ show i
+  show (OpFunDef i j) = addLF $ "FUNDEF " ++ show i ++ " " ++ show j
   show OpFunEnd      = addLF $ "FUNEND"
   show OpRet0        = addLF $ "RET0"
   show OpRet1        = addLF $ "RET1"
@@ -125,9 +125,9 @@ genFunctionAsm f = do
       paramMap = M.fromList (getFunParamVars f)
   modify $ \c -> c{numVars = numArgs, minVars = numArgs}
   modify $ \c -> c{variables = (variables c) `M.union` paramMap}
-  fd <- addOp $ OpFunDef (fm M.! getFunName f)
+  fd <- addOp $ OpFunDef (fm M.! getFunName f) (max 0 (numArgs - 1))
   fds <- genExprAsm (getFunExp f)
-  fe <- addOp $ if getFunName f == "main" then OpFunEnd else OpRet1
+  fe <- addOp $ if numArgs == 0 then OpFunEnd else OpRet1
   return $ fd : fds ++ [fe]
 
 genArithAsm :: Opcode -> Exp -> Exp -> State CompileState [Opcode]
@@ -162,19 +162,21 @@ genExprAsm (IfThenElse e1 e2 e3) = do
   return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
 
 genExprAsm (FunApp fn eps) = do
+  fm <- functions <$> get
   if null eps
     then do
       vars <- variables <$> get
       case M.lookup fn vars of
-        Nothing -> error $ "Variable \"" ++ fn ++ "\" not defined"
+        Nothing -> 
+          case M.lookup fn fm of
+            Nothing -> error $ "Variable \"" ++ fn ++ "\" not defined"
+            Just v  -> sequence [addOp $ OpFunCall v]
         Just v  -> genVarAsm v
     else do
       params <- concat <$> mapM genExprAsm (reverse eps)
-      fm <- functions <$> get
       fcall <- case M.lookup fn fm of
                  Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
-                 Just i  -> do
-                   addOp $ OpFunCall i
+                 Just i  -> addOp $ OpFunCall i
       return $ params ++ [fcall]
 
 genExprAsm (DataCons consname exps) = do
@@ -246,7 +248,7 @@ opLength OpDup         = 1
 opLength OpDrop        = 1
 opLength OpNop         = 1
 opLength OpSwap        = 1
-opLength (OpFunDef _)  = 5
+opLength (OpFunDef _ _) = 5
 opLength OpFunEnd      = 1
 opLength OpRet0        = 1
 opLength OpRet1        = 1
