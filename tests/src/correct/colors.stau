@@ -1,0 +1,6 @@
+data Color = Red | Green | Blue
+
+main = randomColor
+
+randomColor :: Color
+randomColor = Blue

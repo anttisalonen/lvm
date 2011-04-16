@@ -1,0 +1,3 @@
+[0] REF 1 of 4 at 0xdeadbeef
+    INT 2
+0
