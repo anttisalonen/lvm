@@ -1,8 +1,8 @@
 module TypeCheck(typeCheck)
 where
 
-import Data.Function
 import Data.List
+import Data.Function
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad
@@ -19,7 +19,7 @@ typeCheck ast = do
     Right funsigmap -> do
       let topLevelTypes = valueMapToTypeMap preludeVariables `M.union` funsigmap
           funsigmap'    = M.insert "main" (TypeFun []) funsigmap
-          datamap       = M.map dataDeclName $ buildMultiMaps (map constructorName . dataConstructors) (moduleDataDecls ast)
+          datamap       = buildDataTypeMap ast
       case buildConsMap ast of
         Left err      -> Left $ "Data type error: " ++ err
         Right consmap -> do
@@ -27,20 +27,16 @@ typeCheck ast = do
           case M.lookup (getFunName f) funsigmap' of
             Nothing  -> Left $ "Type signature for function `" ++ getFunName f ++ "' not found"
             Just sig ->
-              case paramTypes datamap datadeclset consmap f sig of
+              case paramTypes (M.map dataDeclName datamap) datadeclset consmap f sig of
                 Left err -> Left $ "Parameter declaration error for function `" ++ getFunName f ++ "': " ++ err
                 Right pr ->
-                  case expType (topLevelTypes `M.union` pr) (getFunExp f) of
+                  case expType datamap (topLevelTypes `M.union` pr) (getFunExp f) of
                     Left err -> Left $ "Type error in function `" ++ getFunName f ++ "': " ++ err
                     Right _  -> return ()
 
-buildMultiMaps :: (Ord b) => (a -> [b]) -> [a] -> M.Map b a
-buildMultiMaps fetch src = M.unions (map (buildMultiMap fetch) src)
+type ConstructorMap = M.Map String Constructor
 
-buildMultiMap :: (Ord b) => (a -> [b]) -> a -> M.Map b a
-buildMultiMap fetch src = M.fromList (zip (fetch src) (repeat src))
-
-buildConsMap :: Module -> Either String (M.Map String Constructor)
+buildConsMap :: Module -> Either String ConstructorMap
 buildConsMap ast =
   let conss = concatMap dataConstructors $ moduleDataDecls ast
       consids = map constructorName conss
@@ -72,7 +68,7 @@ funSigType datadeclset (FunSig _ typenames) = do
   types <- mapM (getTypeByName datadeclset) typenames
   return $ TypeFun types
 
-paramTypes :: M.Map String String -> S.Set String -> M.Map String Constructor -> Function -> ExpType -> Either String TypeMap
+paramTypes :: M.Map String String -> S.Set String -> ConstructorMap -> Function -> ExpType -> Either String TypeMap
 paramTypes _ _ _ _ (TypeFun []) = Right M.empty -- main
 paramTypes datamap datadeclset consmap fun (TypeFun types) = liftM M.fromList (paramTypes' (getFunArgs fun) (init types))
   where paramTypes' :: [ParamDecl] -> [ExpType] -> Either String [(String, ExpType)]
@@ -115,46 +111,46 @@ isNumericType _       = False
 
 type TypeMap = M.Map String ExpType
 
-expTypeNumeric :: TypeMap -> Exp -> Exp -> Either String ExpType
-expTypeNumeric em e1 e2 = do
-  et1 <- expType em e1
-  guardE (Right et1 == expType em e2) $ varTypeError "numeric types" em e1 e2
-  guardE (isNumericType et1) $ "Not a numeric type: " ++ showExpType em e1
+expTypeNumeric :: DataTypeMap -> TypeMap -> Exp -> Exp -> Either String ExpType
+expTypeNumeric dm em e1 e2 = do
+  et1 <- expType dm em e1
+  guardE (Right et1 == expType dm em e2) $ varTypeError "numeric types" dm em e1 e2
+  guardE (isNumericType et1) $ "Not a numeric type: " ++ showExpType dm em e1
   return et1
 
-compTypeError :: TypeMap -> Exp -> Exp -> String
+compTypeError :: DataTypeMap -> TypeMap -> Exp -> Exp -> String
 compTypeError = varTypeError "comparison"
 
-varTypeError :: String -> TypeMap -> Exp -> Exp -> String
-varTypeError msg tm e1 e2 =
-  let et1 = showExpType tm e1
-      et2 = showExpType tm e2
+varTypeError :: String -> DataTypeMap -> TypeMap -> Exp -> Exp -> String
+varTypeError msg dm tm e1 e2 =
+  let et1 = showExpType dm tm e1
+      et2 = showExpType dm tm e2
   in typeError msg et1 et2
 
 typeError :: String -> String -> String -> String
 typeError msg e1 e2 =
   "Type error: " ++ msg ++ ": Expression has type " ++ show e1 ++ " - expected " ++ show e2
 
-showExpType :: TypeMap -> Exp -> String
-showExpType tm e1 = either (const "<unknown>") show (expType tm e1)
+showExpType :: DataTypeMap -> TypeMap -> Exp -> String
+showExpType dm tm e1 = either (const "<unknown>") show (expType dm tm e1)
 
-expType :: TypeMap -> Exp -> Either String ExpType
-expType em (Plus e1 e2) = expTypeNumeric em e1 e2
-expType em (Minus e1 e2) = expTypeNumeric em e1 e2
-expType em (Times e1 e2) = expTypeNumeric em e1 e2
-expType em (Div e1 e2) = expTypeNumeric em e1 e2
-expType em (CmpEq e1 e2) = guardE (on (==) (expType em) e1 e2) (compTypeError em e1 e2) >> Right TypeBool
-expType em (CmpLt e1 e2) = guardE (on (==) (expType em) e1 e2) (compTypeError em e1 e2) >> Right TypeBool
-expType em (CmpLe e1 e2) = guardE (on (==) (expType em) e1 e2) (compTypeError em e1 e2) >> Right TypeBool
-expType _  (Int _) = Right TypeInt
-expType em (FunApp n params) = case M.lookup n em of
+expType :: DataTypeMap -> TypeMap -> Exp -> Either String ExpType
+expType dm em (Plus e1 e2) = expTypeNumeric dm em e1 e2
+expType dm em (Minus e1 e2) = expTypeNumeric dm em e1 e2
+expType dm em (Times e1 e2) = expTypeNumeric dm em e1 e2
+expType dm em (Div e1 e2) = expTypeNumeric dm em e1 e2
+expType dm em (CmpEq e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
+expType dm em (CmpLt e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
+expType dm em (CmpLe e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
+expType _  _  (Int _) = Right TypeInt
+expType dm em (FunApp n params) = case M.lookup n em of
                                  Nothing -> Left $ "Unknown variable: `" ++ n ++ "'"
                                  Just (TypeFun expectedParams) ->
                                    let numparams = length params
                                        numExpectedParams = length expectedParams - 1
                                    in if numparams == numExpectedParams
                                         then do
-                                          partypes <- mapM (expType em) params
+                                          partypes <- mapM (expType dm em) params
                                           if and $ zipWith (==) partypes expectedParams
                                             then Right $ last expectedParams
                                             else Left $ "Type error on parameters to `" ++ n ++ "'"
@@ -165,22 +161,23 @@ expType em (FunApp n params) = case M.lookup n em of
                                  Just e -> if null params
                                              then Right e
                                              else Left $ "Function application on non-function `" ++ n ++ "'"
-expType em (DataCons n params) = do
-  mapM_ (expType em) params
+expType dm em (DataCons n params) = do
+  mapM_ (expType dm em) params
   case M.lookup n em of
-    Nothing -> Right (CustomType n)
+    Nothing ->
+      if M.member n dm then Right (CustomType n) else Left $ "Unknown data constructor: " ++ n
     Just r  -> Right r
-expType em (Brack e) = expType em e
-expType em (Negate e) = do
-  et <- expType em e
+expType dm em (Brack e) = expType dm em e
+expType dm em (Negate e) = do
+  et <- expType dm em e
   guardE (isNumericType et) "Type error on numeric type comparison"
   return et
-expType em (IfThenElse e1 e2 e3) = do
-  et1 <- expType em e1
-  et2 <- expType em e2
-  et3 <- expType em e3
-  guardE (et1 == TypeBool) $ typeError "`if' predicate" "Bool" $ showExpType em e1
-  guardE (et2 == et3) $ typeError "`if' branches" (showExpType em e2) (showExpType em e3)
+expType dm em (IfThenElse e1 e2 e3) = do
+  et1 <- expType dm em e1
+  et2 <- expType dm em e2
+  et3 <- expType dm em e3
+  guardE (et1 == TypeBool) $ typeError "`if' predicate" "Bool" $ showExpType dm em e1
+  guardE (et2 == et3) $ typeError "`if' branches" (showExpType dm em e2) (showExpType dm em e3)
   return et2
 
 guardE :: Bool -> String -> Either String ()

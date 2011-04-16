@@ -67,10 +67,11 @@ instance Show Opcode where
 
 generateAssembly :: Module -> [Opcode]
 generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 fm 
-                              (valueMapToVariableMap preludeVariables) dsz
+                              (valueMapToVariableMap preludeVariables) dsz cmap
   where fm = createFunctionMap fns
         fns = moduleFunctions ast
         dsz = createDataSizeMap (moduleDataDecls ast)
+        cmap = buildDataTypeMap ast
 
 valueMapToVariableMap :: ValueMap -> VariableMap
 valueMapToVariableMap = M.map valueToVariable
@@ -81,8 +82,20 @@ valueToVariable (ExpValue e _)   = ExpVariable e
 
 createDataSizeMap :: [DataDecl] -> M.Map String Int
 createDataSizeMap ds =
-  let constructors = concatMap dataConstructors ds
-  in M.fromList (zip (map constructorName constructors) (map ((*4) . length . dataFieldTypes) constructors))
+  M.fromList $ zip (map dataDeclName ds) (map dataDeclSize ds)
+
+dataDeclSize :: DataDecl -> Int
+dataDeclSize dt =
+  let maxTypeSize = maximum (map ((*4) . length . dataFieldTypes) (dataConstructors dt))
+      enumAdd     = if hasMultipleConstructors dt then 4 else 0
+  in maxTypeSize + enumAdd
+
+hasMultipleConstructors :: DataDecl -> Bool
+hasMultipleConstructors dt =
+  case dataConstructors dt of
+    []  -> False
+    [_] -> False
+    _   -> True
 
 generateAssembly' :: [Function] -> State CompileState [Opcode]
 generateAssembly' fns = 
@@ -95,6 +108,7 @@ data CompileState = CompileState {
   , functions :: FunctionMap
   , variables :: VariableMap
   , datasizes :: M.Map String Int
+  , constructorMap :: DataTypeMap
   }
 
 type VariableMap = M.Map String AsmVariable
@@ -180,23 +194,39 @@ genExprAsm (FunApp fn eps) = do
       return $ params ++ [fcall]
 
 genExprAsm (DataCons consname exps) = do
-  dataszs <- datasizes <$> get
-  case M.lookup consname dataszs of
-                   Nothing       -> do
-                     vars <- variables <$> get
-                     case M.lookup consname vars of
-                       Nothing -> error $ "Internal compiler error during code generation: undeclared data constructor " ++ consname
-                       Just v  -> genVarAsm v
-                   Just datasize -> do
-                     osz <- addOp $ OpInt datasize
-                     onew <- addOp OpNew
-                     params <- forM (zip [0..] exps) $ \(i, e) -> do
-                       odup <- addOp OpDup
-                       oidx <- addOp $ OpInt $ i * 4
-                       ea <- genExprAsm e
-                       ost <- addOp OpRStore
-                       return $ [odup, oidx] ++ ea ++ [ost]
-                     return $ [osz, onew] ++ concat params
+  consMap <- constructorMap <$> get
+  case M.lookup consname consMap of
+    Nothing -> do
+      vars <- variables <$> get
+      case M.lookup consname vars of
+        Nothing -> error $ "Internal compiler error during code generation: undeclared data constructor " ++ consname
+        Just v  -> genVarAsm v
+    Just dtt -> do
+      dataszs <- datasizes <$> get
+      case M.lookup (dataDeclName dtt) dataszs of
+        Nothing       -> error $ "Internal compiler error during code generation: unknown data type " ++ dataDeclName dtt
+        Just datasize -> do
+          osz <- addOp $ OpInt datasize
+          onew <- addOp OpNew
+          consasm <-
+            if not (hasMultipleConstructors dtt)
+              then return []
+              else
+                case findIndex (\c -> constructorName c == consname) (dataConstructors dtt) of
+                  Nothing -> error $ "Internal compiler error during code generation: unknown data constructor " ++ consname
+                  Just i  -> do
+                    odup <- addOp OpDup
+                    cidx <- addOp $ OpInt 0
+                    ea   <- addOp $ OpInt i
+                    cst  <- addOp OpRStore
+                    return [odup, cidx, ea, cst]
+          params <- forM (zip [0..] exps) $ \(i, e) -> do
+            odup <- addOp OpDup
+            oidx <- addOp $ OpInt $ i * 4
+            ea <- genExprAsm e
+            ost <- addOp OpRStore
+            return $ [odup, oidx] ++ ea ++ [ost]
+          return $ [osz, onew] ++ consasm ++ concat params
 
 genExprAsm (CmpLt e1 e2) = genArithAsm OpLT e1 e2
 genExprAsm (CmpLe e1 e2) = genArithAsm OpLE e1 e2
