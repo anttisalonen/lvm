@@ -1,9 +1,10 @@
 module StauTypes(preludeVariables,
+  preludeTypes,
   Value(..),
   ValueMap,
   ExpType(..),
-  DataTypeMap,
-  buildDataTypeMap)
+  buildMapsFrom,
+  pair, assocsBy)
 where
 
 {- The definitions needed by Asm and TypeCheck. -}
@@ -15,6 +16,9 @@ import Stau
 
 preludeVariables :: ValueMap
 preludeVariables = M.fromList [("True", ExpValue (Int 1) TypeBool), ("False", ExpValue (Int 0) TypeBool)]
+
+preludeTypes :: [DataDecl]
+preludeTypes = [DataDecl "Bool" [Constructor "False" [], Constructor "True" []]]
 
 data Value = StackValue Int ExpType
            | ExpValue Exp ExpType
@@ -33,15 +37,18 @@ instance Show ExpType where
   show (CustomType n) = n
   show (TypeFun es)   = intercalate " -> " (map show es)
 
-type DataTypeMap = M.Map String DataDecl
+assocsBy :: (a -> b) -> [a] -> [(a, b)]
+assocsBy f xs = zip xs (map f xs)
 
-buildDataTypeMap :: Module -> DataTypeMap
-buildDataTypeMap ast = buildMultiMaps (map constructorName . dataConstructors) (moduleDataDecls ast)
+pair :: [(a, [b])] -> [(a, b)]
+pair [] = []
+pair ((x, (y:ys)):rest) = (x, y) : pair ((x, ys):rest)
+pair ((_, []):rest) = pair rest
 
-buildMultiMaps :: (Ord b) => (a -> [b]) -> [a] -> M.Map b a
-buildMultiMaps fetch src = M.unions (map (buildMultiMap fetch) src)
+buildMapFrom :: (Ord b) => (a -> b) -> a -> M.Map b a
+buildMapFrom f x = M.fromList [(f x, x)]
 
-buildMultiMap :: (Ord b) => (a -> [b]) -> a -> M.Map b a
-buildMultiMap fetch src = M.fromList (zip (fetch src) (repeat src))
+buildMapsFrom :: (Ord b) => (a -> b) -> [a] -> M.Map b a
+buildMapsFrom f = M.unions . map (buildMapFrom f)
 
 

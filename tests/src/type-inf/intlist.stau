@@ -1,0 +1,10 @@
+data V = V1 Int V | V2 Int
+
+f x = if x == 0 then V2 x else V1 x (f (x - 1))
+
+length l = case l of
+             V2 _   -> 1
+             V1 _ n -> 1 + length n
+
+main = length (f 8)
+

@@ -45,6 +45,7 @@ data Constructor = Constructor {
 
 data ParamDecl = VariableParam String
                | ConstructorParam String [ParamDecl]
+               | WildcardParam
   deriving (Show)
 
 data Exp
@@ -61,7 +62,16 @@ data Exp
       | Brack Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp
+      | CaseOf Exp [CasePattern]
   deriving (Show)
+
+data CasePattern = Case {
+    caseParams :: ParamDecl
+  , caseExp    :: Exp
+  }
+  deriving (Show)
+
+type TokenInfo = (Int, Int, Token)
 
 data Token
       = TokenInt Int
@@ -80,12 +90,18 @@ data Token
       | TokenElse
       | TokenOB
       | TokenCB
+      | TokenOCurly
+      | TokenCCurly
       | TokenEndline
       | TokenFunctionType
       | TokenTypeOf
       | TokenPipe
       | TokenData
       | TokenCons String
-  deriving (Show)
+      | TokenWildcard
+      | TokenCase
+      | TokenOf
+      | TokenSemicolon
+  deriving (Eq, Show)
 
 

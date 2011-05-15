@@ -1,0 +1,8 @@
+data V = V1 Int V | V2 Int
+
+f x = case x of
+        V1 a _ -> a
+        V2 b   -> b
+
+main = f (V2 5)
+

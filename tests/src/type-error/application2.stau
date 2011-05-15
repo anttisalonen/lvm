@@ -1,0 +1,5 @@
+f :: Int -> Int
+f x = x * 3
+
+main = f 3 6
+

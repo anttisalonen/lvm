@@ -11,7 +11,12 @@ import Control.Monad.Error()
 import Stau
 import StauTypes
 
-type FunctionMap = M.Map String Int
+type FunctionMap = M.Map String FunctionInfo
+
+data FunctionInfo = FunctionInfo {
+    funNumber          :: Int
+  , funStackHeightDiff :: Int
+ }
 
 data Opcode = OpInt Int
             | OpAdd
@@ -29,7 +34,7 @@ data Opcode = OpInt Int
             | OpFunEnd
             | OpRet0
             | OpRet1
-            | OpFunCall Int
+            | OpFunCall FunctionInfo
             | OpBr Int
             | OpBrNz Int
             | OpLoad Int
@@ -57,7 +62,7 @@ instance Show Opcode where
   show OpFunEnd      = addLF $ "FUNEND"
   show OpRet0        = addLF $ "RET0"
   show OpRet1        = addLF $ "RET1"
-  show (OpFunCall i) = addLF $ "FUNCALL " ++ show i
+  show (OpFunCall f) = addLF $ "FUNCALL " ++ show (funNumber f)
   show (OpBr i)      = addLF $ "BR " ++ show i
   show (OpBrNz i)    = addLF $ "BRNZ " ++ show i
   show (OpLoad i)    = addLF $ "LOAD " ++ show i
@@ -66,12 +71,12 @@ instance Show Opcode where
   show OpRLoad       = addLF $ "RLOAD"
 
 generateAssembly :: Module -> [Opcode]
-generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 fm 
+generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 0 fm 
                               (valueMapToVariableMap preludeVariables) dsz cmap
   where fm = createFunctionMap fns
         fns = moduleFunctions ast
-        dsz = createDataSizeMap (moduleDataDecls ast)
-        cmap = buildDataTypeMap ast
+        dsz = createDataSizeMap $ moduleDataDecls ast ++ preludeTypes
+        cmap = datatypeMap $ moduleDataDecls ast ++ preludeTypes
 
 valueMapToVariableMap :: ValueMap -> VariableMap
 valueMapToVariableMap = M.map valueToVariable
@@ -90,6 +95,13 @@ dataDeclSize dt =
       enumAdd     = if hasMultipleConstructors dt then 4 else 0
   in maxTypeSize + enumAdd
 
+type DataTypeMap = M.Map String (DataDecl, Constructor)
+
+datatypeMap :: [DataDecl] -> DataTypeMap
+datatypeMap decls = 
+           buildMapsFrom (constructorName . snd)
+               (map (\(a, b) -> (a, b)) . pair $ assocsBy dataConstructors decls)
+
 hasMultipleConstructors :: DataDecl -> Bool
 hasMultipleConstructors dt =
   case dataConstructors dt of
@@ -103,12 +115,13 @@ generateAssembly' fns =
 
 data CompileState = CompileState {
     currPos :: Int
+  , stackHeight :: Int
   , numVars :: Int
   , minVars :: Int
   , functions :: FunctionMap
   , variables :: VariableMap
   , datasizes :: M.Map String Int
-  , constructorMap :: DataTypeMap
+  , dtmap :: DataTypeMap
   }
 
 type VariableMap = M.Map String AsmVariable
@@ -125,23 +138,27 @@ getParamVars :: [ParamDecl] -> [(String, AsmVariable)]
 getParamVars ps = concatMap (uncurry getParamVar) (zip [1..] ps)
 
 getParamVar :: Int -> ParamDecl -> [(String, AsmVariable)]
-getParamVar num (VariableParam name)    = [(name, StackVariable num)]
+getParamVar num (VariableParam name)    = [(name, StackVariable (-num))]
 getParamVar num (ConstructorParam _ ps) = concatMap (uncurry (getConsParamVar num)) (zip [0, 4..] ps)
+getParamVar _   WildcardParam           = []
 
 getConsParamVar :: Int -> Int -> ParamDecl -> [(String, AsmVariable)]
-getConsParamVar stp addr (VariableParam name)    = [(name, RefVariable [(stp, addr)])]
+getConsParamVar stp addr (VariableParam name)    = [(name, RefVariable [(-stp, addr)])]
 getConsParamVar stp _    (ConstructorParam _ ps) = concatMap (uncurry (getConsParamVar stp)) (zip [0, 4..] ps)
+getConsParamVar _   _    WildcardParam           = []
 
 genFunctionAsm :: Function -> State CompileState [Opcode]
 genFunctionAsm f = do
   fm <- functions <$> get
-  let numArgs = length $ getFunArgs f
+  let fi       = fm M.! getFunName f
+      numArgs  = length $ getFunArgs f
       paramMap = M.fromList (getFunParamVars f)
-  modify $ \c -> c{numVars = numArgs, minVars = numArgs}
-  modify $ \c -> c{variables = (variables c) `M.union` paramMap}
-  fd <- addOp $ OpFunDef (fm M.! getFunName f) (max 0 (numArgs - 1))
+  modify $ \c -> c{numVars = numArgs, minVars = numArgs,
+                   variables = (variables c) `M.union` paramMap}
+  fd <- addOp $ OpFunDef (funNumber fi) (-(funStackHeightDiff fi))
   fds <- genExprAsm (getFunExp f)
   fe <- addOp $ if numArgs == 0 then OpFunEnd else OpRet1
+  modify $ \c -> c{stackHeight = 0}
   return $ fd : fds ++ [fe]
 
 genArithAsm :: Opcode -> Exp -> Exp -> State CompileState [Opcode]
@@ -183,64 +200,156 @@ genExprAsm (FunApp fn eps) = do
       case M.lookup fn vars of
         Nothing -> 
           case M.lookup fn fm of
-            Nothing -> error $ "Variable \"" ++ fn ++ "\" not defined"
-            Just v  -> sequence [addOp $ OpFunCall v]
+            Nothing -> icError $ "Variable \"" ++ fn ++ "\" not defined"
+            Just f  -> sequence [addOp $ OpFunCall f]
         Just v  -> genVarAsm v
     else do
       params <- concat <$> mapM genExprAsm (reverse eps)
       fcall <- case M.lookup fn fm of
-                 Nothing -> error $ "Function \"" ++ fn ++ "\" not defined"
-                 Just i  -> addOp $ OpFunCall i
+                 Nothing -> icError $ "Function \"" ++ fn ++ "\" not defined"
+                 Just f  -> addOp $ OpFunCall f
       return $ params ++ [fcall]
 
 genExprAsm (DataCons consname exps) = do
-  consMap <- constructorMap <$> get
+  consMap <- dtmap <$> get
   case M.lookup consname consMap of
     Nothing -> do
       vars <- variables <$> get
       case M.lookup consname vars of
-        Nothing -> error $ "Internal compiler error during code generation: undeclared data constructor " ++ consname
+        Nothing -> icError $ "undeclared data constructor " ++ consname
         Just v  -> genVarAsm v
-    Just dtt -> do
+    Just (dtt, _) -> do
       dataszs <- datasizes <$> get
       case M.lookup (dataDeclName dtt) dataszs of
-        Nothing       -> error $ "Internal compiler error during code generation: unknown data type " ++ dataDeclName dtt
+        Nothing       -> icError $ "unknown data type " ++ dataDeclName dtt
         Just datasize -> do
-          osz <- addOp $ OpInt datasize
-          onew <- addOp OpNew
+          osz <- if datasize == 4
+            then return []
+            else sequence [addOp $ OpInt datasize, addOp OpNew]
           consasm <-
             if not (hasMultipleConstructors dtt)
               then return []
               else
                 case findIndex (\c -> constructorName c == consname) (dataConstructors dtt) of
-                  Nothing -> error $ "Internal compiler error during code generation: unknown data constructor " ++ consname
-                  Just i  -> do
-                    odup <- addOp OpDup
-                    cidx <- addOp $ OpInt 0
-                    ea   <- addOp $ OpInt i
-                    cst  <- addOp OpRStore
-                    return [odup, cidx, ea, cst]
+                  Nothing -> icError $ "unknown data constructor " ++ consname
+                  Just i  ->
+                    if datasize == 4
+                      then sequence $ [addOp $ OpInt i]
+                      else do
+                        odup <- addOp OpDup
+                        cidx <- addOp $ OpInt 0
+                        ea   <- addOp $ OpInt i
+                        cst  <- addOp OpRStore
+                        return [odup, cidx, ea, cst]
           params <- forM (zip [0..] exps) $ \(i, e) -> do
             odup <- addOp OpDup
-            oidx <- addOp $ OpInt $ i * 4
+            oidx <- addOp $ OpInt $ (paramIndexToAddr i (hasMultipleConstructors dtt)) * 4
             ea <- genExprAsm e
             ost <- addOp OpRStore
             return $ [odup, oidx] ++ ea ++ [ost]
-          return $ [osz, onew] ++ consasm ++ concat params
+          return $ osz ++ consasm ++ concat params
 
 genExprAsm (CmpLt e1 e2) = genArithAsm OpLT e1 e2
 genExprAsm (CmpLe e1 e2) = genArithAsm OpLE e1 e2
 genExprAsm (CmpEq e1 e2) = genArithAsm OpEQ e1 e2
 genExprAsm (Negate (Int i)) = addVar >> sequence [addOp $ OpInt (-i)]
 genExprAsm (Negate n)       = genArithAsm OpMul (Int (-1)) n
+genExprAsm (CaseOf e1 ps)   = do
+  ea <- genExprAsm e1
+  pa <- caseExprAsm ps
+  return $ ea ++ pa
+
+caseExprAsm :: [CasePattern] -> State CompileState [Opcode]
+caseExprAsm [] = liftM2 (:) (addOp OpDrop) $ patternMatchErrorAsm
+caseExprAsm ((Case WildcardParam ex):_) = liftM2 (:) (addOp OpDrop) $ genExprAsm ex
+caseExprAsm ((Case (VariableParam n) ex):_) = do
+  -- this is probably OK scope-wise..?
+  addLocalVar n Nothing
+  liftM2 (:) (addOp OpDrop) $ genExprAsm ex
+caseExprAsm ((Case (ConstructorParam sn ps) ex):cases) = do
+  -- TODO: save match result to a temporary variable
+  match <- matchAsm sn ps
+  rmVar
+  _  <- addOp $ OpBrNz 0 -- placeholder
+  elseBr <- caseExprAsm cases
+  elseDrops <- addDrops
+  _  <- addOp $ OpBr 0   -- placeholder
+  l2 <- currPos <$> get
+  thenBr <- liftM2 (++) (genExprAsm ex) $ sequence [addOp OpSwap, addOp OpDrop]
+  thenDrops <- addDrops
+  l3 <- currPos <$> get
+  let br1 = [OpBrNz l2]
+      br2 = [OpBr l3]
+  return $ concat [match, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
+
+-- sh +1: [cons enum] => [cons enum, branch or not]
+matchAsm :: String -> [ParamDecl] -> State CompileState [Opcode]
+matchAsm sn ps = do
+  da <- addOp OpDup
+  consMap <- dtmap <$> get
+  -- cncmp and pscmp mustn't change stack height
+  (dtt, cncmp) <- case M.lookup sn consMap of
+                    Nothing       -> icError $ "Unknown constructor: `" ++ sn ++ "'"
+                    Just (dt, cn) -> do
+                      case getConstructorEnum dt cn of
+                        Nothing -> return (dt, [])
+                        Just n  -> do
+                          getcons <- if null ps
+                                          then return []
+                                          else sequence $ [addOp $ OpInt 0, addOp OpRLoad]
+                          cmpcons <- sequence $ [addOp $ OpInt n, addOp OpEQ]
+                          return (dt, getcons ++ cmpcons)
+  pscmp <- concat <$> mapM (uncurry (matchParam $ hasMultipleConstructors dtt)) (zip [0..] ps)
+  return $ [da] ++ cncmp ++ pscmp
+
+matchParam :: Bool -> Int -> ParamDecl -> State CompileState [Opcode]
+matchParam _ _ WildcardParam     = return []
+matchParam m i (VariableParam n) = addLocalVar n (Just (i, m)) >> return []
+matchParam _ _ (ConstructorParam sn ps) = matchAsm sn ps
+
+addLocalVar :: String -> Maybe (Int, Bool) -> State CompileState ()
+addLocalVar n Nothing = do
+  sh <- stackHeight <$> get
+  modify $ \c -> c{variables = (variables c) `M.union` (M.fromList $ [(n, StackVariable (sh - 1))])}
+addLocalVar n (Just (i, t)) = do
+  sh <- stackHeight <$> get
+  modify $ \c -> c{variables = (variables c) `M.union` (M.fromList $ [(n, RefVariable [(sh - 2, 4 * paramIndexToAddr i t)])])}
+
+getLocalVar :: String -> State CompileState [Opcode]
+getLocalVar str = do
+  vars <- variables <$> get
+  genVarAsm $ vars M.! str
+
+getConstructorEnum :: DataDecl -> Constructor -> Maybe Int
+getConstructorEnum dt cn =
+  let conss = dataConstructors dt
+      consnames = map constructorName conss
+  in if singleton conss
+       then Nothing
+       else findIndex (== (constructorName cn)) consnames
+
+-- | Params: index and whether the data type has multiple constructors
+paramIndexToAddr :: Int -> Bool -> Int
+paramIndexToAddr i True  = i + 1
+paramIndexToAddr i False = i
+
+singleton :: [a] -> Bool
+singleton [_] = True
+singleton _   = False
+
+icError :: String -> a
+icError msg = error $ "Internal compiler error on code generation: " ++ msg
+
+patternMatchErrorAsm :: State CompileState [Opcode]
+patternMatchErrorAsm = addOp (OpInt 0) >>= return . return -- TODO: implement exit() in VM
 
 genVarAsm :: AsmVariable -> State CompileState [Opcode]
 genVarAsm (StackVariable v) = do
-  addOp (OpLoad (-v)) >>= return . (:[])
+  addOp (OpLoad v) >>= return . (:[])
 genVarAsm (ExpVariable e)   = genExprAsm e
 genVarAsm (RefVariable rs)  =
   concat <$> (forM rs $ \(stp, addr) -> do
-    st <- addOp $ OpLoad (-stp)
+    st <- addOp $ OpLoad stp
     ad <- addOp $ OpInt addr
     rl <- addOp $ OpRLoad
     return [st, ad, rl])
@@ -262,7 +371,8 @@ addDrops = do
 
 addOp :: Opcode -> State CompileState Opcode
 addOp op = do
-  modify $ \c -> c{currPos = currPos c + opLength op}
+  modify $ \c -> c{currPos = currPos c + opLength op,
+                   stackHeight = stackHeight c + stackHeightDiff op}
   return op
 
 opLength :: Opcode -> Int
@@ -290,8 +400,40 @@ opLength OpNew         = 1
 opLength OpRStore      = 1
 opLength OpRLoad       = 1
 
-createFunctionMap :: [Function] -> M.Map String Int
-createFunctionMap = M.adjust (const 1) "main" . fst . foldl' go (M.empty, 2)
-  where go (mp, nr) f = (M.insertWithKey (\k _ _ -> error $ "Function \"" ++ k ++ "\" already defined.")
-                               (getFunName f) nr mp, succ nr)
+stackHeightDiff :: Opcode -> Int
+stackHeightDiff (OpInt _)     = 1
+stackHeightDiff OpAdd         = -1
+stackHeightDiff OpSub         = -1
+stackHeightDiff OpMul         = -1
+stackHeightDiff OpDiv         = -1
+stackHeightDiff OpLT          = -1
+stackHeightDiff OpLE          = -1
+stackHeightDiff OpEQ          = -1
+stackHeightDiff OpDup         = 1
+stackHeightDiff OpDrop        = -1
+stackHeightDiff OpNop         = 0
+stackHeightDiff OpSwap        = 0
+stackHeightDiff (OpFunDef _ _) = 0 -- not used
+stackHeightDiff OpFunEnd      = 0 -- not used
+stackHeightDiff OpRet0        = 0 -- not used
+stackHeightDiff OpRet1        = 0 -- not used
+stackHeightDiff (OpFunCall f) = funStackHeightDiff f
+stackHeightDiff (OpBr _)      = 0
+stackHeightDiff (OpBrNz _)    = -1
+stackHeightDiff (OpLoad _)    = 1
+stackHeightDiff OpNew         = 0
+stackHeightDiff OpRStore      = -2
+stackHeightDiff OpRLoad       = -1
+
+createFunctionMap :: [Function] -> FunctionMap
+createFunctionMap = M.adjust (const $ FunctionInfo 1 0) "main" . fst . foldl' go (M.empty, 2)
+  where go (mp, nr) f = (M.insertWithKey (\k _ _ -> icError $ "Function \"" ++ k ++ "\" already defined.")
+                               (getFunName f) (getFunInfo nr f) mp, succ nr)
+
+getFunInfo :: Int -> Function -> FunctionInfo
+getFunInfo nr f = FunctionInfo nr (getFunStackHeightDiff f)
+
+getFunStackHeightDiff :: Function -> Int
+getFunStackHeightDiff f = -(max 0 (numArgs - 1))
+  where numArgs = length $ getFunArgs f
 

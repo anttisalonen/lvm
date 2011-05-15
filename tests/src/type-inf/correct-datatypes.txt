@@ -1,0 +1,4 @@
+[0] REF 3 of 8 at 0xdeadbeef
+    INT 8
+    INT 10
+0

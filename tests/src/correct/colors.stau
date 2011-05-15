@@ -1,6 +1,9 @@
 data Color = Red | Green | Blue
 
-main = randomColor
+main = case randomColor of
+         Red   -> 4
+         Green -> 6
+         _     -> 5
 
 randomColor :: Color
-randomColor = Blue
+randomColor =  Blue

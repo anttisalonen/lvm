@@ -1,187 +1,381 @@
 module TypeCheck(typeCheck)
 where
 
+import Data.Char
+import Data.Either
 import Data.List
-import Data.Function
+import Data.Maybe
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Control.Applicative
 import Control.Monad
-import Control.Monad.Error()
+import Control.Monad.State
+import Control.Monad.Error
 
 import Stau
 import StauTypes
 
-typeCheck :: Module -> Either String ()
-typeCheck ast = do
-  let datadeclset   = S.fromList (map dataDeclName (moduleDataDecls ast))
-  case checkSigs datadeclset ast of
-    Left err        -> Left $ "Type signature error: " ++ err
-    Right funsigmap -> do
-      let topLevelTypes = valueMapToTypeMap preludeVariables `M.union` funsigmap
-          funsigmap'    = M.insert "main" (TypeFun []) funsigmap
-          datamap       = buildDataTypeMap ast
-      case buildConsMap ast of
-        Left err      -> Left $ "Data type error: " ++ err
-        Right consmap -> do
-        forM_ (moduleFunctions ast) $ \f -> do
-          case M.lookup (getFunName f) funsigmap' of
-            Nothing  -> Left $ "Type signature for function `" ++ getFunName f ++ "' not found"
-            Just sig ->
-              case paramTypes (M.map dataDeclName datamap) datadeclset consmap f sig of
-                Left err -> Left $ "Parameter declaration error for function `" ++ getFunName f ++ "': " ++ err
-                Right pr ->
-                  case expType datamap (topLevelTypes `M.union` pr) (getFunExp f) of
-                    Left err -> Left $ "Type error in function `" ++ getFunName f ++ "': " ++ err
-                    Right _  -> return ()
+type TypeCheckMonad = Either String
 
-type ConstructorMap = M.Map String Constructor
+newtype VariableName = VariableName String
+  deriving (Show, Eq, Ord)
 
-buildConsMap :: Module -> Either String ConstructorMap
-buildConsMap ast =
-  let conss = concatMap dataConstructors $ moduleDataDecls ast
-      consids = map constructorName conss
-      consmap = M.fromList $ zip consids conss
-  in case findDups consids of
-       [] -> Right consmap
-       ns -> Left $ "Duplicate data constructor definitions: " ++ (intercalate "\n" $ map show ns)
+data Type = TypeVariable TypeVariable
+          | IntType
+          | BoolType
+          | Custom String
+          | FunType [Type] Type
+  deriving (Eq, Ord)
 
-findDups :: (Ord a) => [a] -> [a]
-findDups = map head . filter (\l -> length l > 1) . group . sort
+instance Show Type where
+  show (TypeVariable (TV f i n)) = f ++ "_" ++ i : show n
+  show IntType  = "Int"
+  show BoolType = "Bool"
+  show (Custom n) = n
+  show (FunType es e) = intercalate " -> " (map show (es ++ [e]))
 
-checkSigs :: S.Set String -> Module -> Either String TypeMap
-checkSigs datadeclset (Module funs sigs _) =
-  let funset = S.fromList (map getFunName funs)
-      sigset = S.fromList (map getFunSigName sigs)
-  in if sigset `S.isProperSubsetOf` funset
-       then case funSigTypes datadeclset sigs of
-              Left err -> Left $ "Invalid type signature: " ++ err
-              Right tm -> return tm
-       else Left $ "Type signature without a function"
+type Context = M.Map VariableName Type
 
-funSigTypes :: S.Set String -> [FunSig] -> Either String TypeMap
-funSigTypes datadeclset fs = do
-  allSigs <- mapM (funSigType datadeclset) fs
-  return $ M.fromList $ zip (map getFunSigName fs) allSigs
+type Constraint = M.Map TypeVariable Type 
 
-funSigType :: S.Set String -> FunSig -> Either String ExpType
-funSigType datadeclset (FunSig _ typenames) = do
-  types <- mapM (getTypeByName datadeclset) typenames
-  return $ TypeFun types
+data TypeVariable = TV String Char Int 
+  deriving (Show, Eq, Ord)
 
-paramTypes :: M.Map String String -> S.Set String -> ConstructorMap -> Function -> ExpType -> Either String TypeMap
-paramTypes _ _ _ _ (TypeFun []) = Right M.empty -- main
-paramTypes datamap datadeclset consmap fun (TypeFun types) = liftM M.fromList (paramTypes' (getFunArgs fun) (init types))
-  where paramTypes' :: [ParamDecl] -> [ExpType] -> Either String [(String, ExpType)]
-        paramTypes' [] [] = Right []
-        paramTypes' xs [] = Left $ "Not enough parameter declarations: " ++ show xs
-        paramTypes' [] _  = Left $ "Too many parameter declarations"
-        paramTypes' (VariableParam n : params)         (et:ets) = do
-          let this = (n, et)
-          rest <- paramTypes' params ets
-          return (this : rest)
-        paramTypes' (ConstructorParam dc cps : params) (et:ets)  =
-          case M.lookup dc consmap of
-            Nothing                  -> Left $ "Unknown data constructor: `" ++ dc ++ "'"
-            Just (Constructor _ dft) -> do
-              constypes <- mapM (getTypeByName datadeclset) dft
-              guardE (Just (show et) == M.lookup (show et) datamap) $ "Data type `" ++ show et ++ "' does not match constructor `" ++ dc ++ "'"
-              this <- paramTypes' cps $ constypes
-              rest <- paramTypes' params ets
-              return (this ++ rest)
-paramTypes _ _ _ _ _ = Left $ "Internal compiler error in paramTypes"
+data FunCheckState = FunCheckState {
+    typevariable   :: TypeVariable
+  , context        :: Context
+  , constructormap :: ConstructorMap
+  , constraints    :: Constraint
+  }
 
-getTypeByName :: S.Set String -> String -> Either String ExpType
-getTypeByName _           "Int"  = Right TypeInt
-getTypeByName _           "Bool" = Right TypeBool
-getTypeByName datadeclset n      = 
-  if S.member n datadeclset
-    then Right (CustomType n)
-    else Left $ "Invalid type name: `" ++ n ++ "'"
+-- helper functions
+type ConstructorMap = M.Map String (Type, Constructor)
 
-valueMapToTypeMap :: ValueMap -> TypeMap
-valueMapToTypeMap = M.map valueToType
+constructorMap :: [DataDecl] -> ConstructorMap
+constructorMap decls = 
+           buildMapsFrom (constructorName . snd)
+               (map (\(a, b) -> (Custom (dataDeclName a), b)) . pair $ assocsBy dataConstructors decls)
 
-valueToType :: Value -> ExpType
-valueToType (StackValue _ e) = e
-valueToType (ExpValue   _ e) = e
+tcError :: String -> String -> TypeCheckMonad a
+tcError name msg = throwError $ msg ++ ": `" ++ name ++ "'"
 
-isNumericType :: ExpType -> Bool
-isNumericType TypeInt = True
-isNumericType _       = False
+createMapFrom :: (Ord k) => (a -> k) -> (a -> b) -> [a] -> M.Map k b
+createMapFrom f g xs = M.fromList $ zip (map f xs) (map g xs)
 
-type TypeMap = M.Map String ExpType
+-- entry
+typeCheck :: Module -> TypeCheckMonad ()
+typeCheck m = typeCheck' m >> return ()
 
-expTypeNumeric :: DataTypeMap -> TypeMap -> Exp -> Exp -> Either String ExpType
-expTypeNumeric dm em e1 e2 = do
-  et1 <- expType dm em e1
-  guardE (Right et1 == expType dm em e2) $ varTypeError "numeric types" dm em e1 e2
-  guardE (isNumericType et1) $ "Not a numeric type: " ++ showExpType dm em e1
-  return et1
+typeCheck' :: Module -> TypeCheckMonad Context
+typeCheck' m = do
+  globalContext <- initialModuleContext m
+  -- TODO: warn if user overrides prelude
+  -- TODO: check consmap validity
+  let consmap     = constructorMap (moduleDataDecls m)
+      consprelude = M.fromList [("True", (BoolType, Constructor "True" [])),
+                                ("False", (BoolType, Constructor "False" []))]
+      consmap' = M.union consprelude consmap
+  context <$> (flip execStateT (FunCheckState undefined globalContext consmap' M.empty) $ do
+                forM_ (moduleFunctions m) $ \fun -> do
+                  modify $ \s -> s{typevariable = TV (getFunName fun) 'a' 1}
+                  ft <- runTypecheck fun
+                  addConstraint (TV (getFunName fun) 'a' 0) ft
+                unify)
 
-compTypeError :: DataTypeMap -> TypeMap -> Exp -> Exp -> String
-compTypeError = varTypeError "comparison"
+unifyType :: (TypeVariable, Type) -> StateT FunCheckState TypeCheckMonad ()
+unifyType (tv, t) = do
+      ctxt <- context <$> get
+      forM_ (M.toList ctxt) (specifyType (tv, t))
 
-varTypeError :: String -> DataTypeMap -> TypeMap -> Exp -> Exp -> String
-varTypeError msg dm tm e1 e2 =
-  let et1 = showExpType dm tm e1
-      et2 = showExpType dm tm e2
-  in typeError msg et1 et2
+specifyType :: (TypeVariable, Type) -> (VariableName, Type) -> StateT FunCheckState TypeCheckMonad ()
+specifyType (tv, t) (vn, t'@(TypeVariable tv2)) =
+  when (tv2 == tv) $ do
+    nt <- unifyTypes t t'
+    modify $ \s -> s{context = M.insert vn nt (context s)}
+specifyType (tv, t) (vn, (FunType ps r)) = do
+  r' <- case r of
+          TypeVariable tv2 ->
+            if (tv2 == tv) then unifyTypes t r else return r
+          _ -> return r
+  ps' <- forM ps $ \p -> case p of
+           TypeVariable tv2 ->
+             if tv2 == tv
+               then unifyTypes t p
+               else return p
+           _ -> return p
+  modify $ \s -> s{context = M.insert vn (FunType ps' r') (context s)}
+specifyType _ _ = return ()
 
-typeError :: String -> String -> String -> String
-typeError msg e1 e2 =
-  "Type error: " ++ msg ++ ": Expression has type " ++ show e1 ++ " - expected " ++ show e2
+unifyTypes :: Type -> Type -> StateT FunCheckState TypeCheckMonad Type
+unifyTypes t1 (TypeVariable _) = return t1
+unifyTypes (TypeVariable _) t2 = return t2
+unifyTypes (FunType p1 r1) (FunType p2 r2) = do
+  r <- unifyTypes r1 r2
+  ps <- zipWithM unifyTypes p1 p2
+  return $ FunType ps r
+unifyTypes t1 t2
+  | t1 /= t2  = typeError "" t1 t2
+  | otherwise = return t2
 
-showExpType :: DataTypeMap -> TypeMap -> Exp -> String
-showExpType dm tm e1 = either (const "<unknown>") show (expType dm tm e1)
+unify :: StateT FunCheckState TypeCheckMonad ()
+unify = do
+  cons <- constraints <$> get
+  mapM_ unifyType (M.toList cons)
 
-expType :: DataTypeMap -> TypeMap -> Exp -> Either String ExpType
-expType dm em (Plus e1 e2) = expTypeNumeric dm em e1 e2
-expType dm em (Minus e1 e2) = expTypeNumeric dm em e1 e2
-expType dm em (Times e1 e2) = expTypeNumeric dm em e1 e2
-expType dm em (Div e1 e2) = expTypeNumeric dm em e1 e2
-expType dm em (CmpEq e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
-expType dm em (CmpLt e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
-expType dm em (CmpLe e1 e2) = guardE (on (==) (expType dm em) e1 e2) (compTypeError dm em e1 e2) >> Right TypeBool
-expType _  _  (Int _) = Right TypeInt
-expType dm em (FunApp n params) = case M.lookup n em of
-                                 Nothing -> Left $ "Unknown variable: `" ++ n ++ "'"
-                                 Just (TypeFun expectedParams) ->
-                                   let numparams = length params
-                                       numExpectedParams = length expectedParams - 1
-                                   in if numparams == numExpectedParams
-                                        then do
-                                          partypes <- mapM (expType dm em) params
-                                          if and $ zipWith (==) partypes expectedParams
-                                            then Right $ last expectedParams
-                                            else Left $ "Type error on parameters to `" ++ n ++ "'"
-                                        else
-                                          Left $ concat ["Invalid number of parameters supplied to function `",
-                                                         n, "': found ", show numparams,
-                                                         " - expected ", show numExpectedParams]
-                                 Just e -> if null params
-                                             then Right e
-                                             else Left $ "Function application on non-function `" ++ n ++ "'"
-expType dm em (DataCons n params) = do
-  mapM_ (expType dm em) params
-  case M.lookup n em of
-    Nothing ->
-      if M.member n dm then Right (CustomType n) else Left $ "Unknown data constructor: " ++ n
-    Just r  -> Right r
-expType dm em (Brack e) = expType dm em e
-expType dm em (Negate e) = do
-  et <- expType dm em e
-  guardE (isNumericType et) "Type error on numeric type comparison"
-  return et
-expType dm em (IfThenElse e1 e2 e3) = do
-  et1 <- expType dm em e1
-  et2 <- expType dm em e2
-  et3 <- expType dm em e3
-  guardE (et1 == TypeBool) $ typeError "`if' predicate" "Bool" $ showExpType dm em e1
-  guardE (et2 == et3) $ typeError "`if' branches" (showExpType dm em e2) (showExpType dm em e3)
+typeError :: String -> Type -> Type -> StateT FunCheckState TypeCheckMonad a
+typeError ""   t1 t2 = throwError $ "Type error: expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
+typeError name t1 t2 = throwError $ "Type error on definition of `" ++ name ++ "': expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
+
+initialModuleContext :: Module -> TypeCheckMonad Context
+initialModuleContext m = do
+  funs <- createMapFrom fst snd <$> mapM initialContext (moduleFunctions m)
+  sigs <- createMapFrom fst snd <$> mapM initialSigContext (moduleSignatures m)
+  -- TODO: improve this error message
+  when (not . S.null $ M.keysSet sigs S.\\ M.keysSet funs) $
+    throwError $ "Signature without function declaration"
+  return $ M.union sigs funs
+
+initialFunTV :: Function -> TypeVariable
+initialFunTV fun = TV (getFunName fun) 'a' 0
+
+initialContext :: Function -> TypeCheckMonad (VariableName, Type)
+initialContext fun = return (VariableName (getFunName fun), TypeVariable $ initialFunTV fun)
+
+initialSigContext :: FunSig -> TypeCheckMonad (VariableName, Type)
+initialSigContext funsig = do
+  types <- mapM (sigTypeToType (getFunSigName funsig)) (getFunSigTypes funsig)
+  ctxttype <- case types of
+                []  -> tcError (getFunSigName funsig) "Invalid type signature"
+                [x] -> return x
+                ts  -> return $ FunType (init ts) (last ts)
+  return (VariableName (getFunSigName funsig), ctxttype)
+
+-- TODO: function types
+sigTypeToType :: String -> String -> TypeCheckMonad Type
+sigTypeToType _ "Int"  = return $ IntType
+sigTypeToType _ "Bool" = return $ BoolType
+sigTypeToType _ []     = throwError $ "Invalid type signature"
+sigTypeToType fn xs | isLower (head xs) = return $ TypeVariable $ TV (fn ++ "_" ++ xs) (head xs) 0
+                    | otherwise         = return $ Custom xs
+
+runTypecheck :: Function -> StateT FunCheckState TypeCheckMonad Type
+runTypecheck fun = do
+  prevctxt <- context <$> get
+  paramtypes <- mapM paramType (getFunArgs fun)
+  funt <- expType (getFunExp fun)
+  paramtypes' <- zipWithM fetchParamType (getFunArgs fun) paramtypes
+  updContext prevctxt
+  funType paramtypes' funt
+
+updContext :: Context -> StateT FunCheckState TypeCheckMonad ()
+updContext ctxt = do
+  s <- get
+  put (s{context = ctxt})
+
+fetchParamType :: ParamDecl -> Type -> StateT FunCheckState TypeCheckMonad Type
+fetchParamType (VariableParam n) def = do
+  ctxt <- context <$> get
+  case M.lookup (VariableName n) ctxt of
+    Nothing -> return def
+    Just t' -> return t'
+fetchParamType _ def = return def
+
+funType :: [Type] -> Type -> StateT FunCheckState TypeCheckMonad Type
+funType paramtypes t =
+  return $ mkFunType paramtypes t
+
+mkFunType :: [Type] -> Type -> Type
+mkFunType [] t = t
+mkFunType ps t = FunType ps t
+
+paramType :: ParamDecl -> StateT FunCheckState TypeCheckMonad Type
+paramType (VariableParam n) = do
+  ntv <- nextTypeVariable
+  addToContext n (TypeVariable ntv)
+
+paramType (ConstructorParam sn params) = do
+  consmap <- constructormap <$> get
+  case M.lookup sn consmap of
+    Nothing -> throwError $ "Not in scope: `" ++ sn ++ "'"
+    Just (dt, ct) -> do
+      types <- mapM typeNameToType (dataFieldTypes ct)
+      ptypes <- mapM paramType params
+      when (length types /= length ptypes) $ 
+        throwError $ "Invalid data fields for `" ++ sn ++ "'"
+      zipWithM_ checkType types ptypes
+      return dt
+
+paramType WildcardParam = nextTypeVariable >>= return . TypeVariable
+
+getParamType :: ConstructorMap -> ParamDecl -> Either String (Maybe Type)
+getParamType _       WildcardParam = Right Nothing
+getParamType _       (VariableParam _) = Right Nothing
+getParamType consmap (ConstructorParam sn params) =
+  case M.lookup sn consmap of
+    Nothing       -> Left $ "Not in scope: `" ++ sn ++ "'"
+    Just (dt, ct) -> if length params == length (dataFieldTypes ct)
+                       then do
+                         mapM_ (getParamType consmap) params
+                         return $ Just dt
+                       else Left $ "Invalid parameters for constructor `" ++ constructorName ct ++ "'"
+
+nextTypeVariable :: (Monad m) => StateT FunCheckState m TypeVariable
+nextTypeVariable = do
+  tv <- typevariable <$> get
+  modify $ \f -> f{typevariable = incTypeVariable (typevariable f)}
+  return tv
+
+incTypeVariable :: TypeVariable -> TypeVariable
+incTypeVariable (TV fn 't' n) = TV fn 't' (succ n)
+incTypeVariable (TV fn c   n) = TV fn (succ c) n
+
+addToContext :: String -> Type -> StateT FunCheckState TypeCheckMonad Type
+addToContext tv t = do
+  ctxt <- context <$> get
+  case M.lookup (VariableName tv) ctxt of
+    Nothing -> do
+      modify $ \s -> s{context = M.insert (VariableName tv) t ctxt}
+      return t
+    -- TODO: allow shadowing
+    Just _  -> throwError $ "Error: shadowing variable `" ++ tv ++ "'"
+
+-- No check for overriding for now.
+addConstraint :: TypeVariable -> Type -> StateT FunCheckState TypeCheckMonad ()
+addConstraint tv t = do
+  cons <- constraints <$> get
+  case M.lookup tv cons of
+    Just t' -> checkType t t'
+    Nothing -> do
+      modify $ \s -> s{constraints = M.insert tv t (constraints s)}
+
+checkType :: Type -> Type -> StateT FunCheckState TypeCheckMonad ()
+checkType (TypeVariable tv) t2 = addConstraint tv t2
+checkType t1 (TypeVariable tv) = addConstraint tv t1
+checkType t1@(FunType p1 r1) t2@(FunType p2 r2) = do
+  zipWithM_ checkType p1 p2
+  when (length p1 /= length p2) $ typeError "" t1 t2
+  checkType r1 r2
+checkType t1 t2 | t1 == t2  = return ()
+                | otherwise = typeError "" t1 t2
+
+expTypeNum :: Exp -> Exp -> StateT FunCheckState TypeCheckMonad Type
+expTypeNum e1 e2 = do
+  et1 <- expType e1
+  et2 <- expType e2
+  checkType et1 IntType
+  checkType et2 IntType
+  return IntType
+
+expTypeComp :: Exp -> Exp -> StateT FunCheckState TypeCheckMonad Type
+expTypeComp e1 e2 = do
+  et1 <- expType e1
+  et2 <- expType e2
+  checkType et1 IntType
+  checkType et2 IntType
+  return BoolType
+
+expType :: Exp -> StateT FunCheckState TypeCheckMonad Type
+expType (Plus e1 e2) = expTypeNum e1 e2
+expType (Minus e1 e2) = expTypeNum e1 e2
+expType (Times e1 e2) = expTypeNum e1 e2
+expType (Div e1 e2) = expTypeComp e1 e2
+expType (CmpEq e1 e2) = expTypeComp e1 e2
+expType (CmpLt e1 e2) = expTypeComp e1 e2
+expType (CmpLe e1 e2) = expTypeComp e1 e2
+expType (Int _) = return IntType
+
+expType (FunApp n []) = do
+  ctxt <- context <$> get
+  case M.lookup (VariableName n) ctxt of
+    Nothing -> throwError $ "Not in scope: `" ++ n ++ "'"
+    Just t  -> return t
+
+expType (FunApp n es) = do
+  etypes <- mapM expType es
+  ctxt <- context <$> get
+  rettype <- nextTypeVariable 
+  let funtype = FunType etypes (TypeVariable rettype)
+  case M.lookup (VariableName n) ctxt of
+    Nothing -> throwError $ "Not in scope: `" ++ n ++ "'"
+    Just (TypeVariable p) -> do
+      -- TODO: add constraints to function type?
+      addConstraint p funtype
+      return (TypeVariable rettype)
+    Just t@(FunType params ret) -> do
+      zipWithM_ checkType etypes params
+      -- TODO: currying?
+      when (length params /= length es) $ do
+        typeError n funtype t
+      return ret
+    Just t -> typeError n funtype t
+
+expType (DataCons n es) = do
+  consmap <- constructormap <$> get
+  case M.lookup n consmap of
+    Nothing -> throwError $ "Not in scope: `" ++ n ++ "'"
+    Just (dt, ct) -> do
+      types <- mapM typeNameToType (dataFieldTypes ct)
+      etypes <- mapM expType es
+      when (length types /= length etypes) $ 
+        throwError $ "Invalid data fields for `" ++ n ++ "'"
+      zipWithM_ checkType types etypes
+      return dt
+
+expType (Brack e) = expType e
+expType (Negate e) = expType (Times (Int (-1)) e)
+
+expType (IfThenElse e1 e2 e3) = do
+  et1 <- expType e1
+  et2 <- expType e2
+  et3 <- expType e3
+  checkType et1 BoolType
+  checkType et2 et3
   return et2
 
-guardE :: Bool -> String -> Either String ()
-guardE True  _ = return ()
-guardE False e = fail e
+expType (CaseOf e patterns) = do
+  consmap <- constructormap <$> get
+  let mctypes = map (getParamType consmap) (map caseParams patterns)
+  case lefts mctypes of
+    (p:_) -> throwError p
+    []    -> do
+      case the (catMaybes $ rights mctypes) of
+        Nothing -> throwError $ "Type error in case pattern: not all cases have the same type"
+        Just t  -> do
+          et <- expType e
+          checkType t et
+          exptypes <- mapM (\(Case p ex) -> withContext $ paramType p >> expType ex) patterns
+          matchAll exptypes
+          case exptypes of
+            []     -> throwError "Error: case of with no cases"
+            (t':_) -> return t'
 
+withContext :: StateT FunCheckState TypeCheckMonad a -> StateT FunCheckState TypeCheckMonad a
+withContext a = do
+  ctxt1 <- context <$> get
+  res <- a
+  s' <- get
+  put $ s'{context=ctxt1}
+  return res
+
+-- TODO: function types
+typeNameToType :: String -> StateT FunCheckState TypeCheckMonad Type
+typeNameToType "Int"  = return IntType
+typeNameToType "Bool" = return BoolType
+typeNameToType n = return $ Custom n
+
+matchAll :: [Type] -> StateT FunCheckState TypeCheckMonad ()
+matchAll [] = return ()
+matchAll (t:ts) = matchAll' t ts
+  where matchAll' _ [] = return ()
+        matchAll' tr@(TypeVariable tv) (n:ns) = do
+          addConstraint tv n
+          matchAll' tr ns
+        matchAll' tr (n:ns) = do
+          checkType tr n
+          matchAll' tr ns
+
+the :: (Eq a) => [a] -> Maybe a
+the [] = Nothing
+the (x:xs) | all (x==) xs = Just x
+           | otherwise    = Nothing
 

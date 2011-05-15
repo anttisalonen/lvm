@@ -1,0 +1,6 @@
+data V = V1 Int V | V2 Int
+
+f x = V1 x
+
+main = f 5
+

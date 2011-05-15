@@ -51,7 +51,11 @@ main = do
     input <- readFile ifile
     let eAst = getAST input
     case eAst of
-      Left  err -> boom err
+      Left  err -> do
+        let lexed = stauLexer input
+        print lexed
+        print (lexed >>= return . correctLayout)
+        boom err
       Right ast -> do
         when (showAST opts) $ do
           putStrLn ((intercalate "\n" . map show) $ moduleDataDecls ast)
@@ -66,7 +70,7 @@ main = do
           Left err  -> boom err
 
 getAST :: String -> Either String Module
-getAST s = stauLexer s >>= parseStau
+getAST s = stauLexer s >>= parseStau . correctLayout
 
 compile :: Module -> Either String String
 compile = return . concatMap show . generateAssembly

@@ -33,6 +33,8 @@ import Stau
       then            { TokenThen }
       else            { TokenElse }
       data            { TokenData }
+      case            { TokenCase }
+      of              { TokenOf }
       '=='            { TokenCmpEq }
       '<'             { TokenCmpLt }
       '<='            { TokenCmpLe }
@@ -43,21 +45,24 @@ import Stau
       '/'             { TokenDiv }
       '('             { TokenOB }
       ')'             { TokenCB }
-      '\n'            { TokenEndline }
+      '{'             { TokenOCurly }
+      '}'             { TokenCCurly }
       '->'            { TokenFunctionType }
       '::'            { TokenTypeOf }
       '|'             { TokenPipe }
+      ';'             { TokenSemicolon }
+      '_'             { TokenWildcard }
 %%
 
 ModuleDecls :: { Module }
-ModuleDecls : ModuleDecls '\n' ModuleDecl { $3 `mappend` $1 }
-            | ModuleDecls '\n'            { $1 }
-            | ModuleDecl                  { $1 }
-            | {- empty -}                 { Module [] [] [] }
+ModuleDecls : ModuleDecls ';' ModuleDecl { $3 `mappend` $1 }
+            | ModuleDecls ';'            { $1 }
+            | ModuleDecl                 { $1 }
+            | {- empty -}                { Module [] [] [] }
 
 ModuleDecl :: { Module }
 ModuleDecl : FunDecl  { Module [$1] [] [] }
-	   | FunSig   { Module [] [$1] [] }
+           | FunSig   { Module [] [$1] [] }
            | DataDecl { Module [] [] [$1] }
 
 DataDecl :: { DataDecl }
@@ -77,6 +82,7 @@ Typenames : typename Typenames { $1 : $2 }
 FunSig :: { FunSig }
 FunSig : var  '::' Types { FunSig $1 $3 }
 
+-- TODO: the type should be Tree String for function types
 Types :: { [String] }
 Types : typename '->' Types { $1 : $3 }
       | typename            { [$1] }
@@ -90,6 +96,14 @@ Param : '(' var ')'             { VariableParam $2 }
       | '(' typename Params ')' { ConstructorParam $2 $3 }
       | var                     { VariableParam $1 }
       | typename                { ConstructorParam $1 [] }
+      | '_'                     { WildcardParam }
+
+CaseParam :: { ParamDecl }
+CaseParam : '(' var ')'             { VariableParam $2 }
+          | '(' typename Params ')' { ConstructorParam $2 $3 }
+          | var                     { VariableParam $1 }
+          | typename Params         { ConstructorParam $1 $2 }
+          | '_'                     { WildcardParam }
 
 FunDecl :: { Function }
 FunDecl : var Params '=' Exp { Function $1 $2 $4 }
@@ -112,10 +126,22 @@ Exp  : Exp '+' Exp              { Plus $1 $3 }
      | typename Atoms %prec AP  { DataCons $1 $2 }
      | '-' Exp %prec NEG        { Negate $2 }
      | if Exp then Exp else Exp { IfThenElse $2 $4 $6 }
+     | case Exp of '{' CasePatterns '}' { CaseOf $2 $5 }
+
+CasePatterns :: { [CasePattern] }
+CasePatterns : CasePattern ';' CasePatterns { $1 : $3 }
+             | ';' CasePatterns             { $2 }
+             | CasePattern ';'              { [$1] }
+             | CasePattern                  { [$1] }
+
+CasePattern :: { CasePattern }
+CasePattern : CaseParam '->' Exp { Case $1 $3 }
 
 Atom :: { Exp }
-Atom : int %prec VAR { Int $1 }
-     | '(' Exp ')'   { Brack $2 }
+Atom : int %prec VAR            { Int $1 }
+     | '(' Exp ')'              { Brack $2 }
+     | typename                 { DataCons $1 [] }
+     | var                      { FunApp $1 [] }
 
 {
 
@@ -130,48 +156,72 @@ isEndline :: Char -> Bool
 isEndline '\n' = True
 isEndline _    = False
 
-comb :: String -> Token -> Either String [Token]
-comb a b = case stauLexer a of
+comb :: Int -> String -> TokenInfo -> Either String [TokenInfo]
+comb num a b@(line, col, tok) = case stauLexer' line (col + num) a of
              Left err -> Left err
              Right n  -> Right (b : n)
 
-stauLexer :: String -> Either String [Token]
-stauLexer [] = Right []
-stauLexer (c:cs) 
-      | isSpace c && not (isEndline c) = stauLexer cs
-      | isAsciiLower c = lexVar (c:cs)
-                             [("if", TokenIf),
-                              ("then", TokenThen), 
-                              ("else", TokenElse),
-                              ("data", TokenData)] TokenVar
-      | isAsciiUpper c = lexVar (c:cs)
-                             [] TokenTypeName
-      | isDigit c = lexNum (c:cs)
-stauLexer ('=':'=':cs) = comb cs TokenCmpEq
-stauLexer ('<':'=':cs) = comb cs TokenCmpLe
-stauLexer ('-':'>':cs) = comb cs TokenFunctionType
-stauLexer (':':':':cs) = comb cs TokenTypeOf
-stauLexer ('|':cs) = comb cs TokenPipe
-stauLexer ('<':cs) = comb cs TokenCmpLt
-stauLexer ('=':cs) = comb cs TokenEq
-stauLexer ('+':cs) = comb cs TokenPlus
-stauLexer ('-':cs) = comb cs TokenMinus
-stauLexer ('*':cs) = comb cs TokenTimes
-stauLexer ('/':cs) = comb cs TokenDiv
-stauLexer ('(':cs) = comb cs TokenOB
-stauLexer (')':cs) = comb cs TokenCB
-stauLexer ('\n':cs) = comb cs TokenEndline
-stauLexer (c:_) = Left $ "stauLexer says: Syntax error at '" ++ [c] ++ "'"
+correctLayout :: [TokenInfo] -> [Token]
+correctLayout = correctLayout' 1
 
-lexNum cs = comb rest (TokenInt (read num))
+correctLayout' _ [] = []
+correctLayout' n ((line, col, TokenOf):ti2@(_, col2, t2):ts)
+  | t2 /= TokenOCurly = TokenOf : TokenOCurly : t2 : correctLayout' col2 ts
+correctLayout' n ((_, _, TokenSemicolon):(_, _, TokenSemicolon):ts) = TokenSemicolon : correctLayout' n ts
+correctLayout' n (ti@(line, col, t):ts) 
+  | col > n   = t : correctLayout' n ts
+  | col == n  = TokenSemicolon : t : correctLayout' n ts
+  | otherwise = TokenCCurly : correctLayout' 1 ((line, col, TokenSemicolon) : ti : ts)
+
+advToken :: Int -> Int -> Int -> Token -> String -> Either String [TokenInfo]
+advToken num line col tok cs = comb num cs (line, col, tok)
+
+stauLexer :: String -> Either String [TokenInfo]
+stauLexer = stauLexer' 1 1
+
+stauLexer' :: Int -> Int -> String -> Either String [TokenInfo]
+stauLexer' line col _ | line `seq` col `seq` False = undefined
+stauLexer' _ _ [] = Right []
+stauLexer' line col (c:cs) 
+      | isEndline c = stauLexer' (succ line) 1 cs
+      | isSpace c   = stauLexer' line (succ col) cs
+      | isAsciiLower c || c == '_' = lexVar line col (c:cs)
+                                       [("if",   TokenIf),
+                                        ("then", TokenThen), 
+                                        ("else", TokenElse),
+                                        ("case", TokenCase),
+                                        ("of",   TokenOf),
+                                        ("data", TokenData)]
+                                       (\v -> if v == "_" then TokenWildcard else TokenVar v)
+      | isAsciiUpper c = lexVar line col (c:cs)
+                             [] TokenTypeName
+      | isDigit c = lexNum line col (c:cs)
+stauLexer' line col ('=':'=':cs) = advToken 2 line col TokenCmpEq cs
+stauLexer' line col ('<':'=':cs) = advToken 2 line col TokenCmpLe cs
+stauLexer' line col ('-':'>':cs) = advToken 2 line col TokenFunctionType cs
+stauLexer' line col (':':':':cs) = advToken 2 line col TokenTypeOf cs
+stauLexer' line col ('|':cs) = advToken 1 line col TokenPipe cs
+stauLexer' line col ('<':cs) = advToken 1 line col TokenCmpLt cs
+stauLexer' line col ('=':cs) = advToken 1 line col TokenEq cs
+stauLexer' line col ('+':cs) = advToken 1 line col TokenPlus cs
+stauLexer' line col ('-':cs) = advToken 1 line col TokenMinus cs
+stauLexer' line col ('*':cs) = advToken 1 line col TokenTimes cs
+stauLexer' line col ('/':cs) = advToken 1 line col TokenDiv cs
+stauLexer' line col ('(':cs) = advToken 1 line col TokenOB cs
+stauLexer' line col (')':cs) = advToken 1 line col TokenCB cs
+stauLexer' line col ('{':cs) = advToken 1 line col TokenOCurly cs
+stauLexer' line col ('}':cs) = advToken 1 line col TokenCCurly cs
+stauLexer' line col (';':cs) = advToken 1 line col TokenSemicolon cs
+stauLexer' line col (c:_) = Left $ "stauLexer' says: Syntax error at `" ++ [c] ++ "'"
+
+lexNum line col cs = advToken (length num) line col (TokenInt (read num)) rest
       where (num,rest) = span isDigit cs
 
-lexVar cs cons def = comb rest var
-  where (tok, rest) = span isAlphaNum cs
+lexVar line col cs cons def = advToken (length tok) line col var rest
+  where (tok, rest) = span (\c -> isAlphaNum c || c == '_') cs
         var         = case lookup tok cons of
                         Just cd -> cd
                         Nothing -> def tok
 
 }
-
 

@@ -13,6 +13,8 @@ TESTSCORRECTBINDIR = tests/bin/correct
 TESTSCORRECTSRCDIR = tests/src/correct
 TESTSTYPEERRORBINDIR = tests/bin/type-error
 TESTSTYPEERRORSRCDIR = tests/src/type-error
+TESTSTYPEINFBINDIR = tests/bin/type-inf
+TESTSTYPEINFSRCDIR = tests/src/type-inf
 
 STACKOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack.o)
 STACKGENOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack-gen.o)
@@ -41,10 +43,13 @@ $(TESTSCORRECTBINDIR):
 $(TESTSTYPEERRORBINDIR):
 	@mkdir -p $(TESTSTYPEERRORBINDIR)
 
+$(TESTSTYPEINFBINDIR):
+	@mkdir -p $(TESTSTYPEINFBINDIR)
+
 $(BINDIR):
 	@mkdir -p $(BINDIR)
 
-tests: correct-tests type-error-tests
+tests: correct-tests type-error-tests type-inf-tests
 
 runtests = \
 	rm -f $(2)/result-*.txt; \
@@ -66,6 +71,9 @@ correct-tests: $(TESTSCORRECTBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/st
 
 type-error-tests: $(TESTSTYPEERRORBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
 	@$(call runtests, $(TESTSTYPEERRORSRCDIR), $(TESTSTYPEERRORBINDIR))
+
+type-inf-tests: $(TESTSTYPEINFBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
+	@$(call runtests, $(TESTSTYPEINFSRCDIR), $(TESTSTYPEINFBINDIR))
 
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o \

@@ -1,0 +1,7 @@
+f x = if x == 1 then 1 else x * f (x - 1)
+
+a = b
+b = a
+
+main = f 10
+
