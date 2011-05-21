@@ -72,11 +72,14 @@ instance Show Opcode where
 
 generateAssembly :: Module -> [Opcode]
 generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 0 fm 
-                              (valueMapToVariableMap preludeVariables) dsz cmap
+                              undefined dsz cmap
   where fm = createFunctionMap fns
         fns = moduleFunctions ast
         dsz = createDataSizeMap $ moduleDataDecls ast ++ preludeTypes
         cmap = datatypeMap $ moduleDataDecls ast ++ preludeTypes
+
+initialVarMap :: VariableMap
+initialVarMap = valueMapToVariableMap preludeVariables
 
 valueMapToVariableMap :: ValueMap -> VariableMap
 valueMapToVariableMap = M.map valueToVariable
@@ -110,7 +113,7 @@ hasMultipleConstructors dt =
     _   -> True
 
 generateAssembly' :: [Function] -> State CompileState [Opcode]
-generateAssembly' fns = 
+generateAssembly' fns =
   concat `liftM` forM fns genFunctionAsm
 
 data CompileState = CompileState {
@@ -154,7 +157,7 @@ genFunctionAsm f = do
       numArgs  = length $ getFunArgs f
       paramMap = M.fromList (getFunParamVars f)
   modify $ \c -> c{numVars = numArgs, minVars = numArgs,
-                   variables = (variables c) `M.union` paramMap}
+                   variables = initialVarMap `M.union` paramMap}
   fd <- addOp $ OpFunDef (funNumber fi) (-(funStackHeightDiff fi))
   fds <- genExprAsm (getFunExp f)
   fe <- addOp $ if numArgs == 0 then OpFunEnd else OpRet1
