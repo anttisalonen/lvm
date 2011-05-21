@@ -1,0 +1,4 @@
+add x y = x + y
+ap f x = f x
+add3 x = add 3 x
+main = ap add3 6

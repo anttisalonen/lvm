@@ -41,6 +41,8 @@ data Opcode = OpInt Int
             | OpNew
             | OpRStore
             | OpRLoad
+            | OpPFunCall Int
+            | OpPFunID Int
 
 addLF :: String -> String
 addLF = (++ "\n")
@@ -69,6 +71,8 @@ instance Show Opcode where
   show OpNew         = addLF $ "NEW"
   show OpRStore      = addLF $ "RSTORE"
   show OpRLoad       = addLF $ "RLOAD"
+  show (OpPFunCall _) = addLF $ "FUNPCALL"
+  show (OpPFunID i)  = addLF $ "f" ++ show i
 
 generateAssembly :: Module -> [Opcode]
 generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 0 fm 
@@ -195,6 +199,16 @@ genExprAsm (IfThenElse e1 e2 e3) = do
       br2 = [OpBr l3]
   return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
 
+genExprAsm (Variable vn) = do
+  fm <- functions <$> get
+  vars <- variables <$> get
+  case M.lookup vn vars of
+    Nothing -> 
+      case M.lookup vn fm of
+        Nothing -> icError $ "Variable \"" ++ vn ++ "\" not defined"
+        Just f  -> sequence [addOp . OpPFunID $ funNumber f]
+    Just v  -> genVarAsm v
+
 genExprAsm (FunApp fn eps) = do
   fm <- functions <$> get
   if null eps
@@ -209,9 +223,14 @@ genExprAsm (FunApp fn eps) = do
     else do
       params <- concat <$> mapM genExprAsm (reverse eps)
       fcall <- case M.lookup fn fm of
-                 Nothing -> icError $ "Function \"" ++ fn ++ "\" not defined"
-                 Just f  -> addOp $ OpFunCall f
-      return $ params ++ [fcall]
+                 Nothing -> do
+                   vars <- variables <$> get
+                   case M.lookup fn vars of
+                     Nothing -> icError $ "Function \"" ++ fn ++ "\" not defined"
+                     Just v  -> liftM2 (++) (genVarAsm v) (addOp (OpPFunCall numParams) >>= return . (:[]))
+                       where numParams = length eps
+                 Just f  -> sequence [addOp $ OpFunCall f]
+      return $ params ++ fcall
 
 genExprAsm (DataCons consname exps) = do
   consMap <- dtmap <$> get
@@ -402,6 +421,8 @@ opLength (OpLoad _)    = 5
 opLength OpNew         = 1
 opLength OpRStore      = 1
 opLength OpRLoad       = 1
+opLength (OpPFunCall _) = 1
+opLength (OpPFunID _)  = 5
 
 stackHeightDiff :: Opcode -> Int
 stackHeightDiff (OpInt _)     = 1
@@ -427,6 +448,8 @@ stackHeightDiff (OpLoad _)    = 1
 stackHeightDiff OpNew         = 0
 stackHeightDiff OpRStore      = -2
 stackHeightDiff OpRLoad       = -1
+stackHeightDiff (OpPFunCall p) = getFunStackHeightDiff p
+stackHeightDiff (OpPFunID _)  = 1
 
 createFunctionMap :: [Function] -> FunctionMap
 createFunctionMap = M.adjust (const $ FunctionInfo 1 0) "main" . fst . foldl' go (M.empty, 2)
@@ -434,9 +457,8 @@ createFunctionMap = M.adjust (const $ FunctionInfo 1 0) "main" . fst . foldl' go
                                (getFunName f) (getFunInfo nr f) mp, succ nr)
 
 getFunInfo :: Int -> Function -> FunctionInfo
-getFunInfo nr f = FunctionInfo nr (getFunStackHeightDiff f)
+getFunInfo nr f = FunctionInfo nr (getFunStackHeightDiff $ length $ getFunArgs f)
 
-getFunStackHeightDiff :: Function -> Int
-getFunStackHeightDiff f = -(max 0 (numArgs - 1))
-  where numArgs = length $ getFunArgs f
+getFunStackHeightDiff :: Int -> Int
+getFunStackHeightDiff numArgs = -(max 0 (numArgs - 1))
 

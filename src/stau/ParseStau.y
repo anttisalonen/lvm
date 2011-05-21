@@ -141,7 +141,7 @@ Atom :: { Exp }
 Atom : int %prec VAR            { Int $1 }
      | '(' Exp ')'              { Brack $2 }
      | typename                 { DataCons $1 [] }
-     | var                      { FunApp $1 [] }
+     | var                      { Variable $1 }
 
 {
 

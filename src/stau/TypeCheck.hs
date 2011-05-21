@@ -284,6 +284,12 @@ expType (CmpLt e1 e2) = expTypeComp e1 e2
 expType (CmpLe e1 e2) = expTypeComp e1 e2
 expType (Int _) = return IntType
 
+expType (Variable n) = do
+  ctxt <- context <$> get
+  case M.lookup (VariableName n) ctxt of
+    Nothing -> throwError $ "Not in scope: `" ++ n ++ "'"
+    Just t  -> return t
+
 expType (FunApp n []) = do
   ctxt <- context <$> get
   case M.lookup (VariableName n) ctxt of

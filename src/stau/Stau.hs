@@ -58,6 +58,7 @@ data Exp
       | CmpLe Exp Exp 
       | Int Int 
       | FunApp String [Exp]
+      | Variable String
       | DataCons String [Exp]
       | Brack Exp
       | Negate Exp
