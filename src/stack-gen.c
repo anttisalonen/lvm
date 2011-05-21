@@ -60,18 +60,33 @@ static int interactive;
 static char interactive_buffer[1024];
 static int interactive_bufferpos = 0;
 
+#define OUTPUT_BUFFER_SIZE 1024
+#define MAX_NUM_LABELS 26
+
+static int current_addr = 0;
+static int output_buffer_offset = 0;
+static char output_buffer[OUTPUT_BUFFER_SIZE];
+
+static int labels[MAX_NUM_LABELS];
+static int label_offsets[MAX_NUM_LABELS];
+
 void output_char(char ch)
 {
 	if(interactive) {
 		if(interactive_bufferpos > 1000) {
-			fprintf(stdout, "Buffer full\n");
+			fprintf(stderr, "Buffer full\n");
 			return;
 		}
 		interactive_bufferpos += sprintf(interactive_buffer + interactive_bufferpos,
 				"%c", ch);
 	}
 	else {
-		fprintf(stdout, "%c", ch);
+		output_buffer[output_buffer_offset++] = ch;
+		current_addr++;
+		if(output_buffer_offset >= OUTPUT_BUFFER_SIZE) {
+			fprintf(stderr, "Output buffer full\n");
+			exit(1);
+		}
 	}
 }
 
@@ -90,15 +105,26 @@ void output_nums(char opcode, int a, int b)
 	}
 }
 
-void output_num(char opcode, long int num)
+void output_be(long int num)
 {
 	char buf[4];
-	output_char(opcode);
-	int_to_be(num, buf);
 	int i;
+	int_to_be(num, buf);
 	for(i = 0; i < 4; i++) {
 		output_char(buf[i]);
 	}
+}
+
+void output_num(char opcode, long int num)
+{
+	output_char(opcode);
+	output_be(num);
+}
+
+void output_to_label(char opcode, int label_index)
+{
+	label_offsets[label_index] = current_addr;
+	output_num(opcode, 0);
 }
 
 void output(char opcode)
@@ -106,11 +132,28 @@ void output(char opcode)
 	output_char(opcode);
 }
 
+void flush_output(void)
+{
+	int i;
+	int bufsize = output_buffer_offset;
+	for(i = 0; i < MAX_NUM_LABELS; i++) {
+		if(labels[i] != 0) {
+			output_buffer_offset = label_offsets[i] + 1;
+			output_be(labels[i]);
+		}
+	}
+	for(i = 0; i < bufsize; i++) {
+		fprintf(stdout, "%c", output_buffer[i]);
+	}
+	output_buffer_offset = 0;
+}
+
 int funend(char opcode, int fundef)
 {
 	if(fundef) {
 		fundef = 0;
 		output(opcode);
+		flush_output();
 	}
 	else {
 		fprintf(stderr, "?\n");
@@ -118,11 +161,18 @@ int funend(char opcode, int fundef)
 	return fundef;
 }
 
+void reset_labels(void)
+{
+	memset(labels, 0x00, sizeof(labels));
+	memset(label_offsets, 0x00, sizeof(label_offsets));
+}
+
 int main(int argc, char **argv)
 {
 	char buf[1024];
 	int fundef = 0;
 	interactive = argc > 1 && !strncmp(argv[1], "-i", 2);
+	reset_labels();
 	while(1) {
 		int emptyline;
 		if(interactive) {
@@ -132,7 +182,12 @@ int main(int argc, char **argv)
 		emptyline = (fgets(buf, 1024, stdin) == NULL);
 		if(!interactive && emptyline)
 			break;
-		if(!strncmp(buf, "ADD", 3)) {
+		if(buf[0] == ':') {
+			if(buf[1] >= 'a' && buf[1] <= 'z') {
+				labels[buf[1] - 'a'] = current_addr;
+			}
+		}
+		else if(!strncmp(buf, "ADD", 3)) {
 			output(OPCODE_ADD);
 		}
 		else if(!strncmp(buf, "SUB", 3)) {
@@ -177,8 +232,14 @@ int main(int argc, char **argv)
 		else if(!strncmp(buf, "BR ", 3)) {
 			int succ;
 			long int parsed_num = getnum(buf + 3, &succ);
-			if(!succ)
-				fprintf(stderr, "?\n");
+			if(!succ) {
+				if(buf[3] >= 'a' && buf[3] <= 'z') {
+					output_to_label(OPCODE_BRANCH, buf[3] - 'a');
+				}
+				else {
+					fprintf(stderr, "?\n");
+				}
+			}
 			else {
 				output_num(OPCODE_BRANCH, parsed_num);
 			}
@@ -186,8 +247,14 @@ int main(int argc, char **argv)
 		else if(!strncmp(buf, "BRNZ ", 5)) {
 			int succ;
 			long int parsed_num = getnum(buf + 5, &succ);
-			if(!succ)
-				fprintf(stderr, "?\n");
+			if(!succ) {
+				if(buf[5] >= 'a' && buf[5] <= 'z') {
+					output_to_label(OPCODE_BRANCHNZ, buf[5] - 'a');
+				}
+				else {
+					fprintf(stderr, "?\n");
+				}
+			}
 			else {
 				output_num(OPCODE_BRANCHNZ, parsed_num);
 			}
@@ -213,6 +280,7 @@ int main(int argc, char **argv)
 				else {
 					output_nums(OPCODE_DEFUN_START, parsed_params, parsed_funnum);
 					fundef = 1;
+					reset_labels();
 				}
 			}
 		}
