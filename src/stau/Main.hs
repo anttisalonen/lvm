@@ -48,7 +48,7 @@ main = do
         exitWith (ExitFailure 1)
     let ifile = head nonopts
         ofile = outputfile opts
-    input <- readFile ifile
+    input <- if ifile == "-" then getContents else readFile ifile
     let eAst = getAST input
     case eAst of
       Left  err -> do
@@ -66,7 +66,9 @@ main = do
           Right _  -> return ()
 
         case compile ast of
-          Right res -> writeFile ofile res
+          Right res -> if ofile == "-"
+                         then putStr res
+                         else writeFile ofile res
           Left err  -> boom err
 
 getAST :: String -> Either String Module
