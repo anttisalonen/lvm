@@ -268,6 +268,9 @@ int main(int argc, char **argv)
 				output_num(OPCODE_CALLFUN, parsed_num);
 			}
 		}
+		else if(!strncmp(buf, "FUNPCALL", 8)) {
+			output(OPCODE_CALLPFUN);
+		}
 		else if(!strncmp(buf, "FUNDEF ", 7)) {
 			if(fundef) {
 				fprintf(stderr, "?\n");
@@ -300,6 +303,14 @@ int main(int argc, char **argv)
 				fprintf(stderr, "?\n");
 			else
 				output_num(OPCODE_LOAD, parsed_num);
+		}
+		else if(buf[0] == 'f') {
+			int succ;
+			long int parsed_num = getnum(buf + 1, &succ);
+			if(!succ)
+				fprintf(stderr, "?\n");
+			else
+				output_num(OPCODE_PFUN_ID, parsed_num);
 		}
 		else if(buf[0] == '-' || isdigit(buf[0])) {
 			int succ;

@@ -24,6 +24,8 @@
 #define OPCODE_NEW		0x47
 #define OPCODE_RSTORE		0x48
 #define OPCODE_RLOAD		0x49
+#define OPCODE_CALLPFUN		0x50
+#define OPCODE_PFUN_ID		0x51
 
 #endif
 

@@ -33,6 +33,7 @@ enum opcode {
 
 enum valuetype {
 	valuetype_int,
+	valuetype_fun_id,
 	valuetype_opcode,
 };
 
@@ -108,7 +109,8 @@ static int is_reference(int32_t i)
 	return (i & REF_ID_MASK) == REF_ID_MASK;
 }
 
-static void print_intvalue(int val, unsigned int indent)
+static void print_intvalue(int val, unsigned int indent,
+		int fun_id)
 {
 	if(indent > 70)
 		return;
@@ -128,12 +130,15 @@ static void print_intvalue(int val, unsigned int indent)
 					ref->allocated_object);
 			for(i = 0; i < ref->mem_size / 4; i++) {
 				int *value = ref->allocated_object;
-				print_intvalue(value[i], indent + 4);
+				print_intvalue(value[i], indent + 4, 0);
 			}
 		}
 	}
 	else {
-		fprintf(stderr, "INT %d\n", val);
+		if(fun_id)
+			fprintf(stderr, "FUN_ID %d\n", val);
+		else
+			fprintf(stderr, "INT %d\n", val);
 	}
 }
 
@@ -142,7 +147,9 @@ static void print_stackvalue(int sp, const stackvalue *sv)
 	fprintf(stderr, "[%d] ", sp);
 	switch(sv->vt) {
 		case valuetype_int:
-			print_intvalue(sv->value.intvalue, 0);
+		case valuetype_fun_id:
+			print_intvalue(sv->value.intvalue, 0,
+					sv->vt == valuetype_fun_id);
 			return;
 		case valuetype_opcode:
 			switch(sv->value.op) {
@@ -217,9 +224,10 @@ static uint32_t ref_id_to_int(ref_id i)
 	return i.id | REF_ID_MASK;
 }
 
-static int get_int(const char *buf, int *pc, stackvalue *sv)
+static int get_num(const char *buf, int *pc, stackvalue *sv,
+		enum valuetype vt)
 {
-	sv->vt = valuetype_int;
+	sv->vt = vt;
 	sv->value.intvalue = (buf[*pc]) & 0x7f;
 	sv->value.intvalue += (buf[*pc + 1]) << 7;
 	sv->value.intvalue += (buf[*pc + 2]) << 15;
@@ -228,6 +236,16 @@ static int get_int(const char *buf, int *pc, stackvalue *sv)
 		sv->value.intvalue = -sv->value.intvalue;
 	(*pc) += 4;
 	return 0;
+}
+
+static int get_fun_id(const char *buf, int *pc, stackvalue *sv)
+{
+	return get_num(buf, pc, sv, valuetype_fun_id);
+}
+
+static int get_int(const char *buf, int *pc, stackvalue *sv)
+{
+	return get_num(buf, pc, sv, valuetype_int);
 }
 
 static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
@@ -247,9 +265,11 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_SWAP:
 		case OPCODE_RSTORE:
 		case OPCODE_RLOAD:
+		case OPCODE_CALLPFUN:
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
+		case OPCODE_PFUN_ID:
 		case OPCODE_CALLFUN:
 		case OPCODE_BRANCH:
 		case OPCODE_BRANCHNZ:
@@ -262,6 +282,11 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		default:
 			return 1;
 	}
+}
+
+static int stackvalue_is_fun_id(const stackvalue *sv)
+{
+	return sv->vt == valuetype_fun_id;
 }
 
 static int stackvalue_is_int(const stackvalue *sv)
@@ -327,10 +352,12 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
+		case OPCODE_PFUN_ID:
 			(*pc)++;
 			if(*pc + 4 >= bufsize)
 				return 1;
-			return get_int(buf, pc, sv);
+			return buf[*pc - 1] == OPCODE_INT ? get_int(buf, pc, sv)
+				: get_fun_id(buf, pc, sv);
 		case OPCODE_DEFUN_END:
 		case OPCODE_RET0:
 		case OPCODE_RET1:
@@ -367,14 +394,25 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			*interp = 0;
 			return 0;
 		case OPCODE_CALLFUN:
+		case OPCODE_CALLPFUN:
 			(*pc)++;
-			if(*pc + 4 >= bufsize)
-				return 1;
 			*interp = 0;
-			if(get_int(buf, pc, sv))
-				return 1;
-			if(return_depth + 1 >= MAX_CALL_DEPTH)
-				return 1;
+			if(buf[*pc - 1] == OPCODE_CALLFUN) {
+				if(*pc + 4 >= bufsize)
+					return 1;
+				if(get_int(buf, pc, sv))
+					return 1;
+			}
+			else { /* OPCODE_CALLPFUN */
+				if(*sp < 1)
+					return 1;
+				if(!stackvalue_is_fun_id(&stack[*sp - 1]))
+					return 1;
+				if(return_depth + 1 >= MAX_CALL_DEPTH)
+					return 1;
+				*sv = stack[*sp - 1];
+				(*sp)--;
+			}
 			return_depth++;
 			return_points[return_depth].ret_addr = *pc;
 			return_points[return_depth].fp = *sp;
@@ -631,6 +669,7 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 {
 	switch(sv->vt) {
 		case valuetype_int:
+		case valuetype_fun_id:
 			stack[*sp] = *sv;
 			(*sp)++;
 			return 0;
