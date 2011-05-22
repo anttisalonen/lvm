@@ -310,19 +310,26 @@ matchAsm sn ps = do
   da <- addOp OpDup
   consMap <- dtmap <$> get
   -- cncmp and pscmp mustn't change stack height
-  (dtt, cncmp) <- case M.lookup sn consMap of
-                    Nothing       -> icError $ "Unknown constructor: `" ++ sn ++ "'"
-                    Just (dt, cn) -> do
-                      case getConstructorEnum dt cn of
-                        Nothing -> return (dt, [])
-                        Just n  -> do
-                          getcons <- if null ps
-                                          then return []
-                                          else sequence $ [addOp $ OpInt 0, addOp OpRLoad]
-                          cmpcons <- sequence $ [addOp $ OpInt n, addOp OpEQ]
-                          return (dt, getcons ++ cmpcons)
+  (dtt, cncmp) <- do
+    (dt, cn) <- fetch sn consMap "constructor"
+    case getConstructorEnum dt cn of
+      Nothing -> return (dt, [])
+      Just n  -> do
+        dataszs <- datasizes <$> get
+        datasize <- fetch (dataDeclName dt) dataszs "data type"
+        getcons <- if datasize == 4
+                        then return []
+                        else sequence $ [addOp $ OpInt 0, addOp OpRLoad]
+        cmpcons <- sequence $ [addOp $ OpInt n, addOp OpEQ]
+        return (dt, getcons ++ cmpcons)
   pscmp <- concat <$> mapM (uncurry (matchParam $ hasMultipleConstructors dtt)) (zip [0..] ps)
   return $ [da] ++ cncmp ++ pscmp
+
+fetch :: String -> M.Map String a -> String -> State CompileState a
+fetch key m tp =
+  case M.lookup key m of
+    Nothing -> icError $ "Unknown " ++ tp ++ ": `" ++ key ++ "'"
+    Just v  -> return v
 
 matchParam :: Bool -> Int -> ParamDecl -> State CompileState [Opcode]
 matchParam _ _ WildcardParam     = return []
