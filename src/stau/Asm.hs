@@ -294,7 +294,6 @@ caseExprAsm ((Case (ConstructorParam sn ps) ex):cases) = do
   rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
   elseBr <- caseExprAsm cases
-  elseDrops <- addDrops
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
   thenBr <- liftM2 (++) (genExprAsm ex) $ sequence [addOp OpSwap, addOp OpDrop]
@@ -302,7 +301,7 @@ caseExprAsm ((Case (ConstructorParam sn ps) ex):cases) = do
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
-  return $ concat [match, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
+  return $ concat [match, br1, elseBr, br2, thenDrops, thenBr]
 
 -- sh +1: [cons enum] => [cons enum, branch or not]
 matchAsm :: String -> [ParamDecl] -> State CompileState [Opcode]
