@@ -1,0 +1,8 @@
+data D = A Int | B
+
+f n = case n of
+        A x -> x
+        B   -> 42
+
+main = f (A 7) + f B
+
