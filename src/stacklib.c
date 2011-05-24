@@ -641,7 +641,7 @@ static int interpret_rload(const stackvalue *sv, stackvalue *stack, int *sp)
 		fprintf(stderr, "RLOAD with not enough elements in stack\n");
 		return 1;
 	}
-	if(stack[*sp - 3].vt != valuetype_int || !is_reference(stack[*sp - 2].value.intvalue)) {
+	if(!is_reference(stack[*sp - 2].value.intvalue)) {
 		fprintf(stderr, "RLOAD without reference\n");
 		return 1;
 	}
