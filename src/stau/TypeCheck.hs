@@ -237,14 +237,16 @@ addToContext tv t = do
       modify $ \s -> s{context = M.insert (VariableName tv) t ctxt}
       return t
     -- TODO: allow shadowing
-    Just _  -> throwError $ "Error: shadowing variable `" ++ tv ++ "'"
+    Just _  -> throwError $ "Shadowing variable `" ++ tv ++ "'"
 
 -- No check for overriding for now.
 addConstraint :: TypeVariable -> Type -> StateT FunCheckState TypeCheckMonad ()
 addConstraint tv t = do
   cons <- constraints <$> get
   case M.lookup tv cons of
-    Just t' -> checkType t t'
+    Just t' -> if TypeVariable tv == t'
+                 then return ()
+                 else checkType t t'
     Nothing -> do
       modify $ \s -> s{constraints = M.insert tv t (constraints s)}
 
