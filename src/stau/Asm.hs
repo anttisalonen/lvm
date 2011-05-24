@@ -188,16 +188,15 @@ genExprAsm (IfThenElse e1 e2 e3) = do
   o1 <- genExprAsm e1
   rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
-  elseBr <- genExprAsm e3
   elseDrops <- addDrops
+  elseBr <- genExprAsm e3
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
   thenBr <- genExprAsm e2
-  thenDrops <- addDrops
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
-  return $ concat [o1, br1, elseDrops, elseBr, br2, thenDrops, thenBr]
+  return $ concat [o1, br1, elseDrops, elseBr, br2, thenBr]
 
 genExprAsm (Variable vn) = do
   fm <- functions <$> get
@@ -296,8 +295,8 @@ caseExprAsm ((Case (ConstructorParam sn ps) ex):cases) = do
   elseBr <- caseExprAsm cases
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
-  thenBr <- liftM2 (++) (genExprAsm ex) $ sequence [addOp OpSwap, addOp OpDrop]
   thenDrops <- addDrops
+  thenBr <- liftM2 (++) (genExprAsm ex) $ sequence [addOp OpSwap, addOp OpDrop]
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
