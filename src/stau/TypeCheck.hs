@@ -121,8 +121,8 @@ unify = do
   mapM_ unifyType (M.toList cons)
 
 typeError :: String -> Type -> Type -> StateT FunCheckState TypeCheckMonad a
-typeError ""   t1 t2 = throwError $ "Type error: expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
-typeError name t1 t2 = throwError $ "Type error on definition of `" ++ name ++ "': expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
+typeError ""   t1 t2 = throwError $ "expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
+typeError name t1 t2 = throwError $ "on definition of `" ++ name ++ "': expected `" ++ show t2 ++ "', inferred `" ++ show t1 ++ "'"
 
 initialModuleContext :: Module -> TypeCheckMonad Context
 initialModuleContext m = do
@@ -345,7 +345,7 @@ expType (CaseOf e patterns) = do
     (p:_) -> throwError p
     []    -> do
       case the (catMaybes $ rights mctypes) of
-        Nothing -> throwError $ "Type error in case pattern: not all cases have the same type"
+        Nothing -> throwError $ "case pattern: not all cases have the same type"
         Just t  -> do
           et <- expType e
           checkType t et
