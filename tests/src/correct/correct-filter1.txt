@@ -1,0 +1,26 @@
+[0] REF 43 of 12 at 0xdeadbeef
+    INT 0
+    INT 1
+    REF 44 of 12 at 0xdeadbeef
+        INT 0
+        INT 4
+        REF 45 of 12 at 0xdeadbeef
+            INT 0
+            INT 9
+            REF 46 of 12 at 0xdeadbeef
+                INT 0
+                INT 16
+                REF 47 of 12 at 0xdeadbeef
+                    INT 0
+                    INT 25
+                    REF 48 of 12 at 0xdeadbeef
+                        INT 0
+                        INT 36
+                        REF 49 of 12 at 0xdeadbeef
+                            INT 0
+                            INT 49
+                            REF 50 of 12 at 0xdeadbeef
+                                INT 1
+                                INT 0
+                                INT 0
+0

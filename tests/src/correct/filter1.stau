@@ -1,0 +1,20 @@
+data IntList = Cons Int IntList | Nil
+
+map f l = case l of
+            Nil -> Nil
+            Cons x xs -> Cons (f x) (map f xs)
+
+filter pred l = case l of
+                  Nil -> Nil
+                  Cons x xs -> if pred x then Cons x (filter pred xs) else filter pred xs
+
+makeList i = makeList2 i 1
+
+makeList2 i j = if i <= 0 then Nil else Cons j (makeList2 (i - 1) (j + 1))
+
+lessThan50 y = y < 50
+
+square x = x * x
+
+main = filter lessThan50 (map square (makeList 20))
+
