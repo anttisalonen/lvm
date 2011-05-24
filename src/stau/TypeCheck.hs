@@ -1,4 +1,5 @@
-module TypeCheck(typeCheck)
+module TypeCheck(typeCheck,
+  Context, VariableName(..), Type(..), TypeVariable(..))
 where
 
 import Data.Char
@@ -17,7 +18,7 @@ import StauTypes
 
 type TypeCheckMonad = Either String
 
-newtype VariableName = VariableName String
+newtype VariableName = VariableName { unVariableName :: String }
   deriving (Show, Eq, Ord)
 
 data Type = TypeVariable TypeVariable
@@ -32,7 +33,7 @@ instance Show Type where
   show IntType  = "Int"
   show BoolType = "Bool"
   show (Custom n) = n
-  show (FunType es e) = intercalate " -> " (map show (es ++ [e]))
+  show (FunType es e) = "(" ++ intercalate " -> " (map show (es ++ [e])) ++ ")"
 
 type Context = M.Map VariableName Type
 
@@ -63,11 +64,8 @@ createMapFrom :: (Ord k) => (a -> k) -> (a -> b) -> [a] -> M.Map k b
 createMapFrom f g xs = M.fromList $ zip (map f xs) (map g xs)
 
 -- entry
-typeCheck :: Module -> TypeCheckMonad ()
-typeCheck m = typeCheck' m >> return ()
-
-typeCheck' :: Module -> TypeCheckMonad Context
-typeCheck' m = do
+typeCheck :: Module -> TypeCheckMonad Context
+typeCheck m = do
   globalContext <- initialModuleContext m
   -- TODO: warn if user overrides prelude
   -- TODO: check consmap validity

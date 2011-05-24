@@ -2,6 +2,7 @@ module Main(main)
 where
 
 import Data.List
+import qualified Data.Map as M
 import Control.Monad
 import Control.Monad.Error()
 import System.IO
@@ -18,16 +19,18 @@ data Options = Options
   {
     outputfile        :: FilePath
   , showAST           :: Bool
+  , showTypes         :: Bool
   }
   deriving (Show)
 
 defaultOptions :: Options
-defaultOptions = Options "" False
+defaultOptions = Options "" False False
 
 options :: [OptDescr (Options -> Options)]
 options = [
     Option ['o'] []                (ReqArg (\l o -> o{outputfile = l}) "output file")   "output file"
   , Option ['a'] []                (NoArg  (\o -> o{showAST = True}))                   "show AST"
+  , Option ['t'] []                (NoArg  (\o -> o{showTypes = True}))                 "show inferred types"
   ]
 
 putErrLn :: String -> IO ()
@@ -62,14 +65,28 @@ main = do
           putStrLn ((intercalate "\n" . map show) $ moduleSignatures ast)
           putStrLn ((intercalate "\n" . map show) $ moduleFunctions ast)
         case typeCheck ast of
-          Left err -> boom $ "Type error: " ++ err
-          Right _  -> return ()
-
+          Left err  -> boom $ "Type error: " ++ err
+          Right res ->
+            when (showTypes opts) $ forM_ (M.toList res) $ \(vn, t) -> do
+              putStrLn $ cleanupVariableName (unVariableName vn) ++ " :: " ++ cleanupTypeString (cleanupType t)
         case compile ast of
           Right res -> if ofile == "-"
                          then putStr res
                          else writeFile ofile res
           Left err  -> boom err
+
+cleanupVariableName :: String -> String
+cleanupVariableName = reverse . takeWhile (/= '_') . reverse
+
+cleanupType :: Type -> String
+cleanupType (TypeVariable (TV _ c _)) = return c
+cleanupType (FunType ts t) = "(" ++ intercalate " -> " (map cleanupType (ts ++ [t])) ++ ")"
+cleanupType t = show t
+
+cleanupTypeString :: String -> String
+cleanupTypeString [] = []
+cleanupTypeString l@[_,_] = l
+cleanupTypeString l@(x:xs) = if x == '(' && last xs == ')' then init xs else l
 
 getAST :: String -> Either String Module
 getAST s = stauLexer s >>= parseStau . correctLayout
