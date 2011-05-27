@@ -73,7 +73,7 @@ typeCheck m = do
       consprelude = M.fromList [("True", (BoolType, Constructor "True" [])),
                                 ("False", (BoolType, Constructor "False" []))]
       consmap' = M.union consprelude consmap
-  context <$> (flip execStateT (FunCheckState undefined globalContext consmap' M.empty) $ do
+  context <$> flip execStateT (FunCheckState undefined globalContext consmap' M.empty) (do
                 forM_ (moduleFunctions m) $ \fun -> do
                   modify $ \s -> s{typevariable = TV (getFunName fun) 'a' 1}
                   ft <- runTypecheck fun
@@ -90,10 +90,10 @@ specifyType (tv, t) (vn, t'@(TypeVariable tv2)) =
   when (tv2 == tv) $ do
     nt <- unifyTypes t t'
     modify $ \s -> s{context = M.insert vn nt (context s)}
-specifyType (tv, t) (vn, (FunType ps r)) = do
+specifyType (tv, t) (vn, FunType ps r) = do
   r' <- case r of
           TypeVariable tv2 ->
-            if (tv2 == tv) then unifyTypes t r else return r
+            if tv2 == tv then unifyTypes t r else return r
           _ -> return r
   ps' <- forM ps $ \p -> case p of
            TypeVariable tv2 ->
@@ -129,8 +129,8 @@ initialModuleContext m = do
   funs <- createMapFrom fst snd <$> mapM initialContext (moduleFunctions m)
   sigs <- createMapFrom fst snd <$> mapM initialSigContext (moduleSignatures m)
   -- TODO: improve this error message
-  when (not . S.null $ M.keysSet sigs S.\\ M.keysSet funs) $
-    throwError $ "Signature without function declaration"
+  unless (S.null $ M.keysSet sigs S.\\ M.keysSet funs) $
+    throwError "Signature without function declaration"
   return $ M.union sigs funs
 
 initialFunTV :: Function -> TypeVariable
@@ -150,9 +150,9 @@ initialSigContext funsig = do
 
 -- TODO: function types
 sigTypeToType :: String -> String -> TypeCheckMonad Type
-sigTypeToType _ "Int"  = return $ IntType
-sigTypeToType _ "Bool" = return $ BoolType
-sigTypeToType _ []     = throwError $ "Invalid type signature"
+sigTypeToType _ "Int"  = return IntType
+sigTypeToType _ "Bool" = return BoolType
+sigTypeToType _ []     = throwError "Invalid type signature"
 sigTypeToType fn xs | isLower (head xs) = return $ TypeVariable $ TV (fn ++ "_" ++ xs) (head xs) 0
                     | otherwise         = return $ Custom xs
 
@@ -203,7 +203,7 @@ paramType (ConstructorParam sn params) = do
       zipWithM_ checkType types ptypes
       return dt
 
-paramType WildcardParam = nextTypeVariable >>= return . TypeVariable
+paramType WildcardParam = fmap TypeVariable nextTypeVariable
 
 getParamType :: ConstructorMap -> ParamDecl -> Either String (Maybe Type)
 getParamType _       WildcardParam = Right Nothing
@@ -242,10 +242,8 @@ addConstraint :: TypeVariable -> Type -> StateT FunCheckState TypeCheckMonad ()
 addConstraint tv t = do
   cons <- constraints <$> get
   case M.lookup tv cons of
-    Just t' -> if TypeVariable tv == t'
-                 then return ()
-                 else checkType t t'
-    Nothing -> do
+    Just t' -> unless (TypeVariable tv == t') (checkType t t')
+    Nothing ->
       modify $ \s -> s{constraints = M.insert tv t (constraints s)}
 
 checkType :: Type -> Type -> StateT FunCheckState TypeCheckMonad ()
@@ -310,7 +308,7 @@ expType (FunApp n es) = do
     Just t@(FunType params ret) -> do
       zipWithM_ checkType etypes params
       -- TODO: currying?
-      when (length params /= length es) $ do
+      when (length params /= length es) $
         typeError n funtype t
       return ret
     Just t -> typeError n funtype t
@@ -340,12 +338,12 @@ expType (IfThenElse e1 e2 e3) = do
 
 expType (CaseOf e patterns) = do
   consmap <- constructormap <$> get
-  let mctypes = map (getParamType consmap) (map caseParams patterns)
+  let mctypes = map (getParamType consmap . caseParams) patterns
   case lefts mctypes of
     (p:_) -> throwError p
-    []    -> do
+    []    ->
       case the (catMaybes $ rights mctypes) of
-        Nothing -> throwError $ "case pattern: not all cases have the same type"
+        Nothing -> throwError "case pattern: not all cases have the same type"
         Just t  -> do
           et <- expType e
           checkType t et

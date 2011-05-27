@@ -57,7 +57,7 @@ main = do
       Left  err -> do
         let lexed = stauLexer input
         print lexed
-        print (lexed >>= return . correctLayout)
+        print (fmap correctLayout lexed)
         boom err
       Right ast -> do
         when (showAST opts) $ do
@@ -67,7 +67,7 @@ main = do
         case typeCheck ast of
           Left err  -> boom $ "Type error: " ++ err
           Right res ->
-            when (showTypes opts) $ forM_ (M.toList res) $ \(vn, t) -> do
+            when (showTypes opts) $ forM_ (M.toList res) $ \(vn, t) ->
               putStrLn $ cleanupVariableName (unVariableName vn) ++ " :: " ++ cleanupTypeString (cleanupType t)
         case compile ast of
           Right res -> if ofile == "-"

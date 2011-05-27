@@ -72,7 +72,7 @@ instance Show Opcode where
   show OpRStore      = addLF $ "RSTORE"
   show OpRLoad       = addLF $ "RLOAD"
   show (OpPFunCall _) = addLF $ "FUNPCALL"
-  show (OpPFunID i)  = addLF $ "f" ++ show i
+  show (OpPFunID i)  = addLF $ 'f' : show i
 
 generateAssembly :: Module -> [Opcode]
 generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 0 fm 
@@ -226,7 +226,7 @@ genExprAsm (FunApp fn eps) = do
                    vars <- variables <$> get
                    case M.lookup fn vars of
                      Nothing -> icError $ "Function \"" ++ fn ++ "\" not defined"
-                     Just v  -> liftM2 (++) (genVarAsm v) (addOp (OpPFunCall numParams) >>= return . (:[]))
+                     Just v  -> liftM2 (++) (genVarAsm v) (fmap (:[]) (addOp $ OpPFunCall numParams))
                        where numParams = length eps
                  Just f  -> sequence [addOp $ OpFunCall f]
       return $ params ++ fcall
@@ -255,7 +255,7 @@ genExprAsm (DataCons consname exps) = do
                   Nothing -> icError $ "unknown data constructor " ++ consname
                   Just i  ->
                     if datasize == 4
-                      then sequence $ [addOp $ OpInt i]
+                      then sequence [addOp $ OpInt i]
                       else do
                         odup <- addOp OpDup
                         cidx <- addOp $ OpInt 0
@@ -264,7 +264,7 @@ genExprAsm (DataCons consname exps) = do
                         return [odup, cidx, ea, cst]
           params <- forM (zip [0..] exps) $ \(i, e) -> do
             odup <- addOp OpDup
-            oidx <- addOp $ OpInt $ (paramIndexToAddr i (hasMultipleConstructors dtt)) * 4
+            oidx <- addOp $ OpInt $ paramIndexToAddr i (hasMultipleConstructors dtt) * 4
             ea <- genExprAsm e
             ost <- addOp OpRStore
             return $ [odup, oidx] ++ ea ++ [ost]
@@ -281,13 +281,13 @@ genExprAsm (CaseOf e1 ps)   = do
   return $ ea ++ pa
 
 caseExprAsm :: [CasePattern] -> State CompileState [Opcode]
-caseExprAsm [] = liftM2 (:) (addOp OpDrop) $ patternMatchErrorAsm
-caseExprAsm ((Case WildcardParam ex):_) = liftM2 (:) (addOp OpDrop) $ genExprAsm ex
-caseExprAsm ((Case (VariableParam n) ex):_) = do
+caseExprAsm [] = liftM2 (:) (addOp OpDrop) patternMatchErrorAsm
+caseExprAsm (Case WildcardParam ex:_) = liftM2 (:) (addOp OpDrop) $ genExprAsm ex
+caseExprAsm (Case (VariableParam n) ex:_) = do
   -- this is probably OK scope-wise..?
   addLocalVar n Nothing
   liftM2 (:) (addOp OpDrop) $ genExprAsm ex
-caseExprAsm ((Case (ConstructorParam sn ps) ex):cases) = do
+caseExprAsm (Case (ConstructorParam sn ps) ex:cases) = do
   -- TODO: save match result to a temporary variable
   match <- matchAsm sn ps
   rmVar
@@ -317,7 +317,7 @@ matchAsm sn ps = do
         datasize <- fetch (dataDeclName dt) dataszs "data type"
         getcons <- if datasize == 4
                         then return []
-                        else sequence $ [addOp $ OpInt 0, addOp OpRLoad]
+                        else sequence [addOp $ OpInt 0, addOp OpRLoad]
         cmpcons <- sequence $ [addOp $ OpInt n, addOp OpEQ]
         return (dt, getcons ++ cmpcons)
   pscmp <- concat <$> mapM (uncurry (matchParam $ hasMultipleConstructors dtt)) (zip [0..] ps)
@@ -337,10 +337,10 @@ matchParam _ _ (ConstructorParam sn ps) = matchAsm sn ps
 addLocalVar :: String -> Maybe (Int, Bool) -> State CompileState ()
 addLocalVar n Nothing = do
   sh <- stackHeight <$> get
-  modify $ \c -> c{variables = (variables c) `M.union` (M.fromList $ [(n, StackVariable (sh - 1))])}
+  modify $ \c -> c{variables = variables c `M.union` M.fromList [(n, StackVariable (sh - 1))]}
 addLocalVar n (Just (i, t)) = do
   sh <- stackHeight <$> get
-  modify $ \c -> c{variables = (variables c) `M.union` (M.fromList $ [(n, RefVariable [(sh - 2, 4 * paramIndexToAddr i t)])])}
+  modify $ \c -> c{variables = variables c `M.union` M.fromList [(n, RefVariable [(sh - 2, 4 * paramIndexToAddr i t)])]}
 
 getLocalVar :: String -> State CompileState [Opcode]
 getLocalVar str = do
@@ -353,7 +353,7 @@ getConstructorEnum dt cn =
       consnames = map constructorName conss
   in if singleton conss
        then Nothing
-       else findIndex (== (constructorName cn)) consnames
+       else findIndex (== constructorName cn) consnames
 
 -- | Params: index and whether the data type has multiple constructors
 paramIndexToAddr :: Int -> Bool -> Int
@@ -368,14 +368,14 @@ icError :: String -> a
 icError msg = error $ "Internal compiler error on code generation: " ++ msg
 
 patternMatchErrorAsm :: State CompileState [Opcode]
-patternMatchErrorAsm = addOp (OpInt 0) >>= return . return -- TODO: implement exit() in VM
+patternMatchErrorAsm = fmap return (addOp (OpInt 0)) -- TODO: implement exit() in VM
 
 genVarAsm :: AsmVariable -> State CompileState [Opcode]
-genVarAsm (StackVariable v) = do
-  addOp (OpLoad v) >>= return . (:[])
+genVarAsm (StackVariable v) =
+  fmap (:[]) $ addOp (OpLoad v)
 genVarAsm (ExpVariable e)   = genExprAsm e
 genVarAsm (RefVariable rs)  =
-  concat <$> (forM rs $ \(stp, addr) -> do
+  concat <$> forM rs (\(stp, addr) -> do
     st <- addOp $ OpLoad stp
     ad <- addOp $ OpInt addr
     rl <- addOp $ OpRLoad

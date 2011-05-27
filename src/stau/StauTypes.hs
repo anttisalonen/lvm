@@ -42,7 +42,7 @@ assocsBy f xs = zip xs (map f xs)
 
 pair :: [(a, [b])] -> [(a, b)]
 pair [] = []
-pair ((x, (y:ys)):rest) = (x, y) : pair ((x, ys):rest)
+pair ((x, y:ys):rest) = (x, y) : pair ((x, ys):rest)
 pair ((_, []):rest) = pair rest
 
 buildMapFrom :: (Ord b) => (a -> b) -> a -> M.Map b a
