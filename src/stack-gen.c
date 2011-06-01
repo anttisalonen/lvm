@@ -123,7 +123,7 @@ void output_num(char opcode, long int num)
 
 void output_to_label(char opcode, int label_index)
 {
-	label_offsets[label_index] = current_addr;
+	label_offsets[label_index] = output_buffer_offset;
 	output_num(opcode, 0);
 }
 
@@ -132,7 +132,7 @@ void output(char opcode)
 	output_char(opcode);
 }
 
-void flush_output(void)
+void sync_output(void)
 {
 	int i;
 	int bufsize = output_buffer_offset;
@@ -140,6 +140,7 @@ void flush_output(void)
 		if(labels[i] != 0) {
 			output_buffer_offset = label_offsets[i] + 1;
 			output_be(labels[i]);
+			current_addr -= 4;
 		}
 	}
 	for(i = 0; i < bufsize; i++) {
@@ -153,7 +154,7 @@ int funend(char opcode, int fundef)
 	if(fundef) {
 		fundef = 0;
 		output(opcode);
-		flush_output();
+		sync_output();
 	}
 	else {
 		fprintf(stderr, "?\n");
