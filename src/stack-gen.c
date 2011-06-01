@@ -168,6 +168,33 @@ void reset_labels(void)
 	memset(label_offsets, 0x00, sizeof(label_offsets));
 }
 
+int output_offset(const char *buf, const char *mnemonic,
+		int opcode)
+{
+	char mn_buf[20];
+	int mlen = strlen(mnemonic);
+	snprintf(mn_buf, 19, "%s ", mnemonic);
+	mn_buf[19] = '\0';
+	if(!strncmp(buf, mn_buf, mlen + 1)) {
+		int succ;
+		long int parsed_num = getnum(buf + mlen + 1, &succ);
+		if(!succ) {
+			if(buf[mlen + 1] >= 'a' && buf[mlen + 1] <= 'z') {
+				output_to_label(opcode, buf[mlen + 1] - 'a');
+			}
+			else {
+				fprintf(stderr, "?\n");
+			}
+		}
+		else {
+			output_num(opcode, parsed_num);
+		}
+		return 1;
+	}
+	else
+		return 0;
+}
+
 int main(int argc, char **argv)
 {
 	char buf[1024];
@@ -230,36 +257,12 @@ int main(int argc, char **argv)
 		else if(!strncmp(buf, "RLOAD", 4)) {
 			output(OPCODE_RLOAD);
 		}
-		else if(!strncmp(buf, "BR ", 3)) {
-			int succ;
-			long int parsed_num = getnum(buf + 3, &succ);
-			if(!succ) {
-				if(buf[3] >= 'a' && buf[3] <= 'z') {
-					output_to_label(OPCODE_BRANCH, buf[3] - 'a');
-				}
-				else {
-					fprintf(stderr, "?\n");
-				}
-			}
-			else {
-				output_num(OPCODE_BRANCH, parsed_num);
-			}
+		else if(!strncmp(buf, "END_THUNK", 9)) {
+			output(OPCODE_END_THUNK);
 		}
-		else if(!strncmp(buf, "BRNZ ", 5)) {
-			int succ;
-			long int parsed_num = getnum(buf + 5, &succ);
-			if(!succ) {
-				if(buf[5] >= 'a' && buf[5] <= 'z') {
-					output_to_label(OPCODE_BRANCHNZ, buf[5] - 'a');
-				}
-				else {
-					fprintf(stderr, "?\n");
-				}
-			}
-			else {
-				output_num(OPCODE_BRANCHNZ, parsed_num);
-			}
-		}
+		else if(output_offset(buf, "BR", OPCODE_BRANCH));
+		else if(output_offset(buf, "BRNZ", OPCODE_BRANCHNZ));
+		else if(output_offset(buf, "THUNK", OPCODE_START_THUNK));
 		else if(!strncmp(buf, "FUNCALL ", 8)) {
 			int succ;
 			long int parsed_num = getnum(buf + 8, &succ);

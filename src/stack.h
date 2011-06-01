@@ -26,6 +26,8 @@
 #define OPCODE_RLOAD		0x49
 #define OPCODE_CALLPFUN		0x50
 #define OPCODE_PFUN_ID		0x51
+#define OPCODE_START_THUNK	0x52
+#define OPCODE_END_THUNK	0x53
 
 #endif
 

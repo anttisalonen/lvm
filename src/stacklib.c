@@ -53,6 +53,7 @@ typedef struct {
 	ref_id reference_id;
 	size_t mem_size;
 	void *allocated_object;
+	int closure;
 } reference;
 
 #define MAX_NUM_FUNCTIONS 1024
@@ -79,6 +80,12 @@ static struct {
 } return_points[MAX_CALL_DEPTH];
 
 #define STACK_SIZE 1024
+
+struct closure {
+	int pc;
+	int sp;
+	stackvalue stack[STACK_SIZE];
+};
 
 static int pc;
 static stackvalue stack[STACK_SIZE];
@@ -128,7 +135,7 @@ static void print_intvalue(int val, unsigned int indent,
 					ref->reference_id.id,
 					ref->mem_size,
 					ref->allocated_object);
-			for(i = 0; i < ref->mem_size / 4; i++) {
+			for(i = 0; i < 4 && i < ref->mem_size / 4; i++) {
 				int *value = ref->allocated_object;
 				print_intvalue(value[i], indent + 4, 0);
 			}
@@ -266,6 +273,7 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_RSTORE:
 		case OPCODE_RLOAD:
 		case OPCODE_CALLPFUN:
+		case OPCODE_END_THUNK:
 			(*pc)++;
 			return 0;
 		case OPCODE_INT:
@@ -273,6 +281,7 @@ static int get_fun_value(const char *buf, int *pc, unsigned int bufsize)
 		case OPCODE_CALLFUN:
 		case OPCODE_BRANCH:
 		case OPCODE_BRANCHNZ:
+		case OPCODE_START_THUNK:
 		case OPCODE_LOAD:
 			(*pc)++;
 			if(*pc + 4 >= bufsize)
@@ -326,6 +335,29 @@ static enum opcode opcode_to_enum(int opcode)
 		default: // nop
 			return opcode_nop;
 	}
+}
+
+static stackvalue new_object(int size)
+{
+	stackvalue tmp;
+	uint32_t ref_id = next_reference_id++;
+	if(ref_id >= MAX_NUM_OBJECTS) {
+		panic("too many objects");
+	}
+	objects[ref_id].reference_id.id = ref_id;
+	objects[ref_id].mem_size = size;
+	objects[ref_id].closure = 0;
+	objects[ref_id].allocated_object = malloc(size);
+	if(!objects[ref_id].allocated_object) {
+		panic("no memory available");
+	}
+	tmp.vt = valuetype_int;
+	tmp.value.intvalue = ref_id_to_int(objects[ref_id].reference_id);
+	dprintf("NEW %d (%p) of size %d\n",
+			objects[ref_id].reference_id.id,
+			objects[ref_id].allocated_object,
+			objects[ref_id].mem_size);
+	return tmp;
 }
 
 static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
@@ -453,6 +485,33 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			*sv = stack[sv->value.intvalue + return_points[return_depth].fp];
 			return 0;
 
+		case OPCODE_START_THUNK:
+			(*pc)++;
+			struct closure *cls;
+			*interp = 0;
+			if(*pc + 4 >= bufsize)
+				return 1;
+			if(get_int(buf, pc, sv))
+				return 1;
+
+			stack[*sp] = new_object(sizeof(struct closure));
+			reference *ref = get_obj(int_to_ref_id(stack[*sp].value.intvalue));
+			if(!ref)
+				panic("No reference on thunk");
+			cls = ref->allocated_object;
+			ref->closure = 1;
+			cls->pc = *pc;
+			/* TODO: do not copy the whole stack */
+			memcpy(&cls->stack, stack, sizeof(stack));
+			cls->sp = *sp - 1;
+
+			(*pc) = sv->value.intvalue;
+			(*sp)++;
+			return 0;
+
+		case OPCODE_END_THUNK:
+			return 1;
+
 		default:
 			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
 					*pc, buf[*pc]);
@@ -565,28 +624,6 @@ static int interpret_swap(const stackvalue *sv, stackvalue *stack, int *sp)
 	stack[*sp - 1] = stack[*sp - 2];
 	stack[*sp - 2] = tmp;
 	return 0;
-}
-
-static stackvalue new_object(int size)
-{
-	stackvalue tmp;
-	uint32_t ref_id = next_reference_id++;
-	if(ref_id >= MAX_NUM_OBJECTS) {
-		panic("too many objects");
-	}
-	objects[ref_id].reference_id.id = ref_id;
-	objects[ref_id].mem_size = size;
-	objects[ref_id].allocated_object = malloc(size);
-	if(!objects[ref_id].allocated_object) {
-		panic("no memory available");
-	}
-	tmp.vt = valuetype_int;
-	tmp.value.intvalue = ref_id_to_int(objects[ref_id].reference_id);
-	dprintf("NEW %d (%p) of size %d\n",
-			objects[ref_id].reference_id.id,
-			objects[ref_id].allocated_object,
-			objects[ref_id].mem_size);
-	return tmp;
 }
 
 static int interpret_new(const stackvalue *sv, stackvalue *stack, int *sp)
