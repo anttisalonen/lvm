@@ -300,7 +300,7 @@ static int stackvalue_is_fun_id(const stackvalue *sv)
 
 static int stackvalue_is_int(const stackvalue *sv)
 {
-	return sv->vt == valuetype_int;
+	return sv->vt == valuetype_int && !is_reference(sv->value.intvalue);
 }
 
 static enum opcode opcode_to_enum(int opcode)
