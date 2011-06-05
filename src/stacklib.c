@@ -5,7 +5,7 @@
 
 #include "stack.h"
 
-// #define DEBUG
+/* #define DEBUG */
 
 #ifdef DEBUG
 #define dprintf(...) \
@@ -332,7 +332,7 @@ static enum opcode opcode_to_enum(int opcode)
 			return opcode_rstore;
 		case OPCODE_RLOAD:
 			return opcode_rload;
-		default: // nop
+		default: /* nop */
 			return opcode_nop;
 	}
 }
