@@ -776,9 +776,9 @@ static void get_unsigned_shorts(const char *buf, int *pc,
 	*b += (buf[*pc + 3]) << 7;
 	if(buf[*pc] & 0x80)
 		*a = -*a;
-	if(buf[*(pc + 2)] & 0x80)
+	if(buf[*pc + 2] & 0x80)
 		*b = -*b;
-	(*pc) += 4;
+	*pc += 4;
 	return;
 }
 
