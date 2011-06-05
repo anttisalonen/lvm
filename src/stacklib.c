@@ -35,6 +35,8 @@ enum valuetype {
 	valuetype_int,
 	valuetype_fun_id,
 	valuetype_opcode,
+	valuetype_object,
+	valuetype_closure,
 };
 
 typedef struct {
@@ -46,11 +48,7 @@ typedef struct {
 } stackvalue;
 
 typedef struct {
-	int id;
-} ref_id;
-
-typedef struct {
-	ref_id reference_id;
+	int reference_id;
 	size_t mem_size;
 	void *allocated_object;
 	int closure;
@@ -77,6 +75,8 @@ static struct {
 	int ret_addr;
 	int fp;
 	int fun_number;
+	int cls_ret_sp;
+	int cls_sp_pos;
 } return_points[MAX_CALL_DEPTH];
 
 #define STACK_SIZE 1024
@@ -84,80 +84,46 @@ static struct {
 struct closure {
 	int pc;
 	int sp;
-	stackvalue stack[STACK_SIZE];
+	int stack_size;
+	int num_params;
+	/* NOTE: stack must be the last element in the struct
+	 * (will be treated as an array) */
+	stackvalue stack;
 };
 
 static int pc;
 static stackvalue stack[STACK_SIZE];
 static int sp;
 
-#define REF_ID_MASK (0x7 << 28)
+#define REF_ID_MASK (0xf << 28)
+#define CLS_ID_MASK (0x1 << 28)
+#define OBJ_ID_MASK (0x2 << 28)
 
-static reference *get_obj(ref_id ref_id)
+static reference *get_obj(int ref_id)
 {
-	if(ref_id.id <= 0 || ref_id.id >= MAX_NUM_OBJECTS)
+	if(!(ref_id & REF_ID_MASK))
 		return NULL;
-	return &objects[ref_id.id];
+	ref_id &= ~REF_ID_MASK;
+	if(ref_id <= 0 || ref_id >= MAX_NUM_OBJECTS)
+		return NULL;
+	return &objects[ref_id];
 }
 
-static ref_id int_to_ref_id(int32_t i)
+static void print_stackvalue(const stackvalue *sv, int sp,
+		unsigned int indent)
 {
-	ref_id id;
-	id.id = i & ~(REF_ID_MASK);
-	return id;
-}
-
-static int is_reference(int32_t i)
-{
-	if(i < 1)
-		return 0;
-	if(int_to_ref_id(i).id >= MAX_NUM_OBJECTS)
-		return 0;
-	return (i & REF_ID_MASK) == REF_ID_MASK;
-}
-
-static void print_intvalue(int val, unsigned int indent,
-		int fun_id)
-{
+	reference *ref;
 	if(indent > 70)
 		return;
 	int spaces;
+	if(indent == 0)
+		fprintf(stderr, "[%d] ", sp);
 	for(spaces = 0; spaces < indent; spaces++)
 		fputc(' ', stderr);
-	if(is_reference(val)) {
-		reference *ref = get_obj(int_to_ref_id(val));
-		if(!ref) {
-			fprintf(stderr, "REF invalid\n");
-		}
-		else {
-			int i;
-			fprintf(stderr, "REF %d of %d at %p\n",
-					ref->reference_id.id,
-					ref->mem_size,
-					ref->allocated_object);
-			for(i = 0; i < 4 && i < ref->mem_size / 4; i++) {
-				int *value = ref->allocated_object;
-				print_intvalue(value[i], indent + 4, 0);
-			}
-		}
-	}
-	else {
-		if(fun_id)
-			fprintf(stderr, "FUN_ID %d\n", val);
-		else
-			fprintf(stderr, "INT %d\n", val);
-	}
-}
-
-static void print_stackvalue(int sp, const stackvalue *sv)
-{
-	fprintf(stderr, "[%d] ", sp);
 	switch(sv->vt) {
 		case valuetype_int:
-		case valuetype_fun_id:
-			print_intvalue(sv->value.intvalue, 0,
-					sv->vt == valuetype_fun_id);
-			return;
+			fprintf(stderr, "INT %d\n", sv->value.intvalue);
+			break;
 		case valuetype_opcode:
 			switch(sv->value.op) {
 				case opcode_add:
@@ -203,9 +169,38 @@ static void print_stackvalue(int sp, const stackvalue *sv)
 					fprintf(stderr, "RLOAD\n");
 					return;
 			}
-		default:
-			fprintf(stderr, "<unknown>\n");
-			return;
+			break;
+		case valuetype_fun_id:
+			fprintf(stderr, "FUN_ID %d\n", sv->value.intvalue);
+			break;
+		case valuetype_object:
+			ref = get_obj(sv->value.intvalue);
+			if(!ref) {
+				fprintf(stderr, "REF invalid\n");
+			}
+			else {
+				int i;
+				fprintf(stderr, "REF %d of %d at %p\n",
+						ref->reference_id,
+						ref->mem_size,
+						ref->allocated_object);
+				for(i = 0; i < 4 && i < ref->mem_size / 4; i++) {
+					int *value = ref->allocated_object;
+					stackvalue sv2;
+					sv2.vt = valuetype_int;
+					sv2.value.intvalue = value[i];
+					if((sv2.value.intvalue & OBJ_ID_MASK) == OBJ_ID_MASK)
+						sv2.vt = valuetype_object;
+					else if((sv2.value.intvalue & CLS_ID_MASK) == CLS_ID_MASK)
+						sv2.vt = valuetype_closure;
+					print_stackvalue(&sv2, sp, indent + 4);
+				}
+			}
+			break;
+		case valuetype_closure:
+			fprintf(stderr, "CLS %d\n",
+					sv->value.intvalue & ~REF_ID_MASK);
+			break;
 	}
 }
 
@@ -213,7 +208,7 @@ static void print_stack(const stackvalue *stack, int sp)
 {
 	sp--;
 	while(sp >= 0) {
-		print_stackvalue(sp, &stack[sp]);
+		print_stackvalue(&stack[sp], sp, 0);
 		sp--;
 	}
 }
@@ -224,11 +219,6 @@ static void panic(const char *msg)
 	fprintf(stderr, "PC: 0x%04x\n", pc);
 	print_stack(stack, sp);
 	exit(1);
-}
-
-static uint32_t ref_id_to_int(ref_id i)
-{
-	return i.id | REF_ID_MASK;
 }
 
 static int get_num(const char *buf, int *pc, stackvalue *sv,
@@ -300,7 +290,7 @@ static int stackvalue_is_fun_id(const stackvalue *sv)
 
 static int stackvalue_is_int(const stackvalue *sv)
 {
-	return sv->vt == valuetype_int && !is_reference(sv->value.intvalue);
+	return sv->vt == valuetype_int;
 }
 
 static enum opcode opcode_to_enum(int opcode)
@@ -337,32 +327,55 @@ static enum opcode opcode_to_enum(int opcode)
 	}
 }
 
-static stackvalue new_object(int size)
+static stackvalue new_reference(int size, enum valuetype vt)
 {
 	stackvalue tmp;
 	uint32_t ref_id = next_reference_id++;
 	if(ref_id >= MAX_NUM_OBJECTS) {
 		panic("too many objects");
 	}
-	objects[ref_id].reference_id.id = ref_id;
+	objects[ref_id].reference_id = ref_id;
 	objects[ref_id].mem_size = size;
-	objects[ref_id].closure = 0;
+	objects[ref_id].closure = vt == valuetype_closure;
 	objects[ref_id].allocated_object = malloc(size);
 	if(!objects[ref_id].allocated_object) {
 		panic("no memory available");
 	}
-	tmp.vt = valuetype_int;
-	tmp.value.intvalue = ref_id_to_int(objects[ref_id].reference_id);
+	tmp.vt = vt;
+	tmp.value.intvalue = ref_id | (vt == valuetype_closure ? CLS_ID_MASK : OBJ_ID_MASK);
 	dprintf("NEW %d (%p) of size %d\n",
-			objects[ref_id].reference_id.id,
+			objects[ref_id].reference_id,
 			objects[ref_id].allocated_object,
 			objects[ref_id].mem_size);
 	return tmp;
 }
 
+static int open_closure(int clsdepth, stackvalue *stack, int *sp, int *pc,
+		int curr_opcode_length)
+{
+	stackvalue *sv = &stack[*sp - clsdepth];
+	const reference *ref = get_obj(sv->value.intvalue);
+	struct closure *cls;
+	if(!ref)
+		return 1;
+	cls = ref->allocated_object;
+	memcpy(&stack[*sp], &cls->stack, cls->stack_size * sizeof(stackvalue));
+	return_depth++;
+	return_points[return_depth].ret_addr = *pc - curr_opcode_length;
+	return_points[return_depth].fp = *sp + cls->num_params;
+	return_points[return_depth].fun_number = -1;
+	return_points[return_depth].cls_ret_sp = *sp;
+	return_points[return_depth].cls_sp_pos = *sp - clsdepth;
+	*pc = cls->pc;
+	*sp += cls->stack_size;
+	return 0;
+}
+
 static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
 		int *interp, stackvalue *stack, int *sp)
 {
+	struct closure *cls;
+	int stack_size, stack_size_bytes;
 	*interp = 1;
 	switch(buf[*pc]) {
 		case OPCODE_ADD:
@@ -394,6 +407,7 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 		case OPCODE_RET0:
 		case OPCODE_RET1:
 			if(return_depth == 0) {
+				/* pc == -1 terminates */
 				*pc = -1;
 			}
 			else {
@@ -407,6 +421,11 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 					dprintf("Old sp: %d; sp: %d\n", old_sp, *sp);
 				}
 				*pc = return_points[return_depth].ret_addr;
+				/* TODO: move this check to function address buildup */
+				if(return_points[return_depth].fun_number == -1) {
+					fprintf(stderr, "Function end within closure definition\n");
+					return 1;
+				}
 				int num_params = functions[return_points[return_depth].fun_number].num_params;
 				if(num_params) {
 					if(num_params <= *sp) {
@@ -455,6 +474,8 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			*interp = 0;
 			if(*sp < 1)
 				return 1;
+			if(stack[*sp - 1].vt == valuetype_closure)
+				return open_closure(1, stack, sp, pc, 0);
 			if(!stackvalue_is_int(&stack[*sp - 1]))
 				return 1;
 			int32_t i1 = stack[*sp - 1].value.intvalue;
@@ -486,31 +507,45 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			return 0;
 
 		case OPCODE_START_THUNK:
-			(*pc)++;
-			struct closure *cls;
+			stack_size = *sp - (return_depth == 0 ? 0 : return_points[return_depth - 1].fp);
+			stack_size_bytes = stack_size * sizeof(stackvalue);
 			*interp = 0;
+			(*pc)++;
 			if(*pc + 4 >= bufsize)
 				return 1;
 			if(get_int(buf, pc, sv))
 				return 1;
 
-			stack[*sp] = new_object(sizeof(struct closure));
-			reference *ref = get_obj(int_to_ref_id(stack[*sp].value.intvalue));
+			stack[*sp] = new_reference(sizeof(struct closure) + stack_size_bytes,
+					valuetype_closure);
+			reference *ref = get_obj(stack[*sp].value.intvalue);
 			if(!ref)
 				panic("No reference on thunk");
 			cls = ref->allocated_object;
-			ref->closure = 1;
 			cls->pc = *pc;
-			/* TODO: do not copy the whole stack */
-			memcpy(&cls->stack, stack, sizeof(stack));
-			cls->sp = *sp - 1;
+			cls->stack_size = stack_size;
+			cls->num_params = return_depth == 0 ? 0 :
+				return_points[return_depth].fp - return_points[return_depth - 1].fp;
+			memcpy(&cls->stack, &stack[*sp - stack_size], stack_size_bytes);
 
 			(*pc) = sv->value.intvalue;
 			(*sp)++;
 			return 0;
 
 		case OPCODE_END_THUNK:
-			return 1;
+			/* TODO: move this check to function address buildup */
+			if(return_points[return_depth].fun_number != -1) {
+				fprintf(stderr, "Closure end within function\n");
+				return 1;
+			}
+			/* On closure end only the topmost value gets copied */
+			int old_sp = *sp - 1;
+			*sp = return_points[return_depth].cls_ret_sp;
+			stack[return_points[return_depth].cls_sp_pos] = stack[old_sp];
+			*pc = return_points[return_depth].ret_addr;
+			return_depth--;
+			*interp = 0;
+			return 0;
 
 		default:
 			fprintf(stderr, "Invalid opcode at 0x%0x: 0x%x\n",
@@ -519,7 +554,8 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 	}
 }
 
-static int interpret_arith_opcode(const stackvalue *sv, stackvalue *stack, int *sp)
+static int interpret_arith_opcode(const stackvalue *sv, stackvalue *stack, int *sp,
+		int *pc)
 {
 	int32_t i1;
 	int32_t i2;
@@ -528,6 +564,10 @@ static int interpret_arith_opcode(const stackvalue *sv, stackvalue *stack, int *
 				*sp);
 		return 1;
 	}
+	if(stack[*sp - 1].vt == valuetype_closure)
+		return open_closure(1, stack, sp, pc, 1);
+	if(stack[*sp - 2].vt == valuetype_closure)
+		return open_closure(2, stack, sp, pc, 1);
 	if(!stackvalue_is_int(&stack[*sp - 1])) {
 		fprintf(stderr, "arithmetic with no int\n");
 		return 1;
@@ -632,7 +672,7 @@ static int interpret_new(const stackvalue *sv, stackvalue *stack, int *sp)
 		fprintf(stderr, "NEW with empty stack\n");
 		return 1;
 	}
-	stack[*sp - 1] = new_object(stack[*sp - 1].value.intvalue);
+	stack[*sp - 1] = new_reference(stack[*sp - 1].value.intvalue, valuetype_object);
 	return 0;
 }
 
@@ -646,13 +686,13 @@ static int interpret_rstore(const stackvalue *sv, stackvalue *stack, int *sp)
 		fprintf(stderr, "RSTORE with not enough elements in stack\n");
 		return 1;
 	}
-	if(stack[*sp - 3].vt != valuetype_int || !is_reference(stack[*sp - 3].value.intvalue)) {
-		fprintf(stderr, "RSTORE without reference\n");
+	if(stack[*sp - 3].vt != valuetype_object) {
+		fprintf(stderr, "RSTORE without object\n");
 		return 1;
 	}
-	reference *ref = get_obj(int_to_ref_id(stack[*sp - 3].value.intvalue));
+	reference *ref = get_obj(stack[*sp - 3].value.intvalue);
 	if(!ref) {
-		fprintf(stderr, "RSTORE with unknown reference\n");
+		fprintf(stderr, "RSTORE with unknown object\n");
 		return 1;
 	}
 	if(stack[*sp - 2].vt != valuetype_int ||
@@ -662,12 +702,12 @@ static int interpret_rstore(const stackvalue *sv, stackvalue *stack, int *sp)
 		fprintf(stderr, "RSTORE without valid address\n");
 		return 1;
 	}
-	if(stack[*sp - 1].vt != valuetype_int) {
-		fprintf(stderr, "RSTORE without value\n");
-		return 1;
-	}
 	int *value_pointer = ref->allocated_object + stack[*sp - 2].value.intvalue;
 	*value_pointer = stack[*sp - 1].value.intvalue;
+	if(stack[*sp - 1].vt == valuetype_object)
+		*value_pointer |= OBJ_ID_MASK;
+	else if(stack[*sp - 1].vt == valuetype_closure)
+		*value_pointer |= CLS_ID_MASK;
 	*sp -= 3;
 	return 0;
 }
@@ -678,13 +718,14 @@ static int interpret_rload(const stackvalue *sv, stackvalue *stack, int *sp)
 		fprintf(stderr, "RLOAD with not enough elements in stack\n");
 		return 1;
 	}
-	if(!is_reference(stack[*sp - 2].value.intvalue)) {
-		fprintf(stderr, "RLOAD without reference\n");
+	if(stack[*sp - 2].vt != valuetype_object) {
+		fprintf(stderr, "RLOAD without object (value type %d with value %d)\n",
+				stack[*sp - 2].vt, stack[*sp - 2].value.intvalue);
 		return 1;
 	}
-	reference *ref = get_obj(int_to_ref_id(stack[*sp - 2].value.intvalue));
+	reference *ref = get_obj(stack[*sp - 2].value.intvalue);
 	if(!ref) {
-		fprintf(stderr, "RLOAD without valid reference\n");
+		fprintf(stderr, "RLOAD without valid object\n");
 		return 1;
 	}
 	if(stack[*sp - 1].vt != valuetype_int ||
@@ -698,15 +739,21 @@ static int interpret_rload(const stackvalue *sv, stackvalue *stack, int *sp)
 	*sp -= 2;
 	stack[*sp].vt = valuetype_int;
 	stack[*sp].value.intvalue = *value_pointer;
+	if((*value_pointer & OBJ_ID_MASK) == OBJ_ID_MASK)
+		stack[*sp].vt = valuetype_object;
+	else if((*value_pointer & CLS_ID_MASK) == CLS_ID_MASK)
+		stack[*sp].vt = valuetype_closure;
 	(*sp)++;
 	return 0;
 }
 
-static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
+static int interpret(const stackvalue *sv, stackvalue *stack, int *sp, int *pc)
 {
 	switch(sv->vt) {
 		case valuetype_int:
 		case valuetype_fun_id:
+		case valuetype_object:
+		case valuetype_closure:
 			stack[*sp] = *sv;
 			(*sp)++;
 			return 0;
@@ -719,7 +766,7 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp)
 				case opcode_lt:
 				case opcode_le:
 				case opcode_eq:
-					return interpret_arith_opcode(sv, stack, sp);
+					return interpret_arith_opcode(sv, stack, sp, pc);
 				case opcode_dup:
 					return interpret_dup(sv, stack, sp);
 				case opcode_drop:
@@ -745,7 +792,9 @@ static int run_code(const char *buf, unsigned int bufsize)
 	pc = functions[0].start_addr;
 	sp = 0;
 	return_points[0].fp = 0;
-	while(pc != bufsize && pc != -1) {
+	while((pc != bufsize && pc != -1) || (sp > 0 &&
+			stack[sp - 1].vt == valuetype_closure &&
+			 !open_closure(1, stack, &sp, &pc, 0) && pc != bufsize && pc != -1)) {
 		stackvalue sv;
 		int interp;
 		if(sp >= STACK_SIZE) {
@@ -757,7 +806,7 @@ static int run_code(const char *buf, unsigned int bufsize)
 			return 1;
 		}
 		if(interp) {
-			if(interpret(&sv, stack, &sp)) {
+			if(interpret(&sv, stack, &sp, &pc)) {
 				panic("Invalid instruction on interpret");
 				return 1;
 			}
@@ -866,5 +915,4 @@ int parse_file(const char *filename)
 	fclose(fp);
 	return parse_buffer(buf, ret);
 }
-
 
