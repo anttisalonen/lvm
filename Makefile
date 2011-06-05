@@ -16,6 +16,9 @@ TESTSTYPEERRORSRCDIR = tests/src/type-error
 TESTSTYPEINFBINDIR = tests/bin/type-inf
 TESTSTYPEINFSRCDIR = tests/src/type-inf
 
+TESTSSTACKSRCDIR = tests/src/stack
+TESTSSTACKBINDIR = tests/bin/stack
+
 STACKOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack.o)
 STACKGENOBJS = $(addprefix $(SRCDIR)/, stacklib.o stack-gen.o)
 
@@ -40,6 +43,9 @@ $(BINDIR)/stau: $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hs
 $(TESTSCORRECTBINDIR):
 	@mkdir -p $(TESTSCORRECTBINDIR)
 
+$(TESTSSTACKBINDIR):
+	@mkdir -p $(TESTSSTACKBINDIR)
+
 $(TESTSTYPEERRORBINDIR):
 	@mkdir -p $(TESTSTYPEERRORBINDIR)
 
@@ -49,7 +55,7 @@ $(TESTSTYPEINFBINDIR):
 $(BINDIR):
 	@mkdir -p $(BINDIR)
 
-tests: correct-tests type-error-tests type-inf-tests
+tests: stack-tests correct-tests type-error-tests type-inf-tests
 
 runtests = \
 	rm -f $(2)/result-*.txt; \
@@ -66,6 +72,23 @@ runtests = \
 					echo "Test `basename $$file .stau` failed"; \
 	done
 
+runstacktests = \
+	rm -f $(2)/result-*.txt; \
+	for file in $(1)/*.sta; do \
+		rm -f $(2)/result-`basename $$file .sta`.txt; \
+		$(BINDIR)/stack-gen < $(1)/`basename $$file` | \
+			$(BINDIR)/stack - 2>&1 | sed -e 's/ at 0x[0-9a-f]*/ at 0xdeadbeef/' > \
+				$(2)/result-`basename $$file .sta`.txt; \
+		echo $$? >> $(2)/result-`basename $$file .sta`.txt; \
+		(cmp $(2)/result-`basename $$file .sta`.txt \
+			$(1)/correct-`basename $$file .sta`.txt >/dev/null 2>&1 && \
+				echo "Test `basename $$file .sta` successful") || \
+					echo "Test `basename $$file .sta` failed"; \
+	done
+
+stack-tests: $(TESTSSTACKBINDIR) $(BINDIR)/stack $(BINDIR)/stack-gen
+	@$(call runstacktests, $(TESTSSTACKSRCDIR), $(TESTSSTACKBINDIR))
+
 correct-tests: $(TESTSCORRECTBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
 	@$(call runtests, $(TESTSCORRECTSRCDIR), $(TESTSCORRECTBINDIR))
 
@@ -77,7 +100,7 @@ type-inf-tests: $(TESTSTYPEINFBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/s
 
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o \
-		$(TESTSCORRECTBINDIR) $(TESTSTYPEERRORBINDIR) $(TESTSTYPEINFBINDIR) $(STACKOBJS) $(STACKGENOBJS)
+		$(TESTSSTACKBINDIR) $(TESTSCORRECTBINDIR) $(TESTSTYPEERRORBINDIR) $(TESTSTYPEINFBINDIR) $(STACKOBJS) $(STACKGENOBJS)
 
 .PHONY: clean tests
 
