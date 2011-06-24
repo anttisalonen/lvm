@@ -217,7 +217,7 @@ getParamType consmap (ConstructorParam sn params) =
                          return $ Just dt
                        else Left $ "Invalid parameters for constructor `" ++ constructorName ct ++ "'"
 
-nextTypeVariable :: (Monad m) => StateT FunCheckState m TypeVariable
+nextTypeVariable :: (Functor m, Monad m) => StateT FunCheckState m TypeVariable
 nextTypeVariable = do
   tv <- typevariable <$> get
   modify $ \f -> f{typevariable = incTypeVariable (typevariable f)}
