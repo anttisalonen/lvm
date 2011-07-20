@@ -43,6 +43,8 @@ data Opcode = OpInt Int
             | OpRLoad
             | OpPFunCall Int
             | OpPFunID Int
+            | OpThunkStart Int
+            | OpThunkEnd
 
 addLF :: String -> String
 addLF = (++ "\n")
@@ -73,6 +75,8 @@ instance Show Opcode where
   show OpRLoad       = addLF $ "RLOAD"
   show (OpPFunCall _) = addLF $ "FUNPCALL"
   show (OpPFunID i)  = addLF $ 'f' : show i
+  show (OpThunkStart i) = addLF $ "THUNK " ++ show i
+  show OpThunkEnd    = addLF $ "END_THUNK"
 
 generateAssembly :: Module -> [Opcode]
 generateAssembly ast = evalState (generateAssembly' fns) $ CompileState 0 0 0 0 fm 
@@ -169,12 +173,21 @@ genFunctionAsm f = do
   return $ fd : fds ++ [fe]
 
 genArithAsm :: Opcode -> Exp -> Exp -> State CompileState [Opcode]
-genArithAsm op e1 e2 = do
+genArithAsm op e1 e2 = thunk $ do
   a1 <- genExprAsm e1
   a2 <- genExprAsm e2
   rmVar
   opc <- addOp op
   return $ a1 ++ a2 ++ [opc]
+
+thunk :: State CompileState [Opcode] -> State CompileState [Opcode]
+thunk block = do
+  _ <- addOp $ OpThunkStart 0 -- placeholder
+  bl <- block
+  thend <- addOp OpThunkEnd
+  lbl <- currPos <$> get
+  let thn = OpThunkStart lbl
+  return $ thn : bl ++ [thend]
 
 genExprAsm :: Exp -> State CompileState [Opcode]
 genExprAsm (Plus e1 e2)  = genArithAsm OpAdd e1 e2
@@ -428,6 +441,8 @@ opLength OpRStore      = 1
 opLength OpRLoad       = 1
 opLength (OpPFunCall _) = 1
 opLength (OpPFunID _)  = 5
+opLength (OpThunkStart _)  = 5
+opLength OpThunkEnd    = 1
 
 stackHeightDiff :: Opcode -> Int
 stackHeightDiff (OpInt _)     = 1
@@ -455,6 +470,8 @@ stackHeightDiff OpRStore      = -2
 stackHeightDiff OpRLoad       = -1
 stackHeightDiff (OpPFunCall p) = getFunStackHeightDiff p
 stackHeightDiff (OpPFunID _)  = 1
+stackHeightDiff (OpThunkStart _)  = 0
+stackHeightDiff OpThunkEnd    = 0
 
 createFunctionMap :: [Function] -> FunctionMap
 createFunctionMap = M.adjust (const $ FunctionInfo 1 0) "main" . fst . foldl' go (M.empty, 2)
