@@ -90,12 +90,25 @@ void output_char(char ch)
 	}
 }
 
-void output_ffiname(const char *str)
+void output_until_space(const char *str)
 {
-	while(!isspace(*str)) {
+	while(!isspace(*str) && *str != '\0') {
 		output_char(*str);
 		str++;
 	}
+}
+
+void output_version(void)
+{
+	output_char(CURRENT_VERSION);
+}
+
+void output_magic(void)
+{
+	output_char(MAGIC_00);
+	output_char(MAGIC_01);
+	output_char(MAGIC_02);
+	output_char(MAGIC_03);
 }
 
 void output_nums(char opcode, int a, int b)
@@ -238,7 +251,7 @@ int handle_ffidef(const char *buf)
 		else
 			output_char(0);
 	}
-	output_ffiname(numptr);
+	output_until_space(numptr);
 	sync_output();
 	reset_labels();
 	return 1;
@@ -250,6 +263,17 @@ int main(int argc, char **argv)
 	int fundef = 0;
 	interactive = argc > 1 && !strncmp(argv[1], "-i", 2);
 	reset_labels();
+	if(!interactive) {
+		int lib_index = 1;
+		output_magic();
+		output_version();
+		for(lib_index = 1; lib_index < MAX_NUM_LIBS && lib_index < argc;
+				lib_index++) {
+			output_until_space(argv[lib_index]);
+			output_char(' ');
+		}
+		output_char('\0');
+	}
 	while(1) {
 		int emptyline;
 		if(interactive) {

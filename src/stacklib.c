@@ -1094,8 +1094,14 @@ static int prep_ffi_cif(int fun_number)
 			functions[fun_number - 1].call.ffi.args) == FFI_OK;
 }
 
-static int add_ffidef(const char *buf, int *pc, int bufsize,
-		void *dlhandle)
+struct libdata {
+	void *dlhandle;
+	char libname[MAX_LIBNAME_LENGTH];
+};
+
+static struct libdata libraries[MAX_NUM_LIBS];
+
+static int add_ffidef(const char *buf, int *pc, int bufsize)
 {
 	enum ffitype ffi_rettype;
 	uint16_t ffi_ret;
@@ -1105,7 +1111,7 @@ static int add_ffidef(const char *buf, int *pc, int bufsize,
 	int num_params = 0;
 	char ffiname[128];
 	int i;
-	void *ffiptr;
+	void *ffiptr = NULL;
 	char *dlerr;
 
 	if(*pc + 4 >= bufsize)
@@ -1171,19 +1177,20 @@ static int add_ffidef(const char *buf, int *pc, int bufsize,
 		return 1;
 	}
 
-	if(!dlhandle) {
-		fprintf(stderr, "Dynamic library handle not initialized.\n");
+	for(i = 0; i < MAX_NUM_LIBS; i++) {
+		if(libraries[i].dlhandle) {
+			dlerror();
+			ffiptr = dlsym(libraries[i].dlhandle, ffiname);
+			dlerr = dlerror();
+			if(ffiptr && !dlerr)
+				break;
+		}
+	}
+	if(!ffiptr) {
+		fprintf(stderr, "Could not find function '%s'.\n",
+				ffiname);
 		return 1;
 	}
-	dlerror();
-	ffiptr = dlsym(dlhandle, ffiname);
-	dlerr = dlerror();
-	if(dlerr) {
-		fprintf(stderr, "Could not find function '%s': %s\n",
-				ffiname, dlerr);
-		return 1;
-	}
-
 	functions[fun_number - 1].ffi = 1;
 	functions[fun_number - 1].call.ffi.ffiptr = ffiptr;
 	functions[fun_number - 1].num_params = num_params;
@@ -1196,7 +1203,7 @@ static int add_ffidef(const char *buf, int *pc, int bufsize,
 }
 
 static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
-		void *dlhandle, int *current_fundef)
+		int *current_fundef)
 {
 	uint16_t fun_number;
 	uint16_t fun_params;
@@ -1236,7 +1243,7 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 				return 1;
 			}
 			(*pc)++;
-			return add_ffidef(buf, pc, bufsize, dlhandle);
+			return add_ffidef(buf, pc, bufsize);
 		default:
 			fprintf(stderr, "Unexpected opcode at 0x%x: 0x%x\n",
 					*pc, buf[*pc]);
@@ -1244,13 +1251,13 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 	}
 }
 
-static int setup_functions(const char *buf, void *dlhandle, int bufsize)
+static int setup_functions(const char *buf, int bufsize)
 {
 	int pc = 0;
 	int current_fundef = 0;
 	while(pc != bufsize) {
 		if(get_fun_value(buf, &pc, bufsize)) {
-			if(get_fundef(buf, &pc, bufsize, dlhandle, &current_fundef)) {
+			if(get_fundef(buf, &pc, bufsize, &current_fundef)) {
 				fprintf(stderr, "Invalid function definition (function %d)\n",
 						current_fundef);
 				return 1;
@@ -1260,27 +1267,111 @@ static int setup_functions(const char *buf, void *dlhandle, int bufsize)
 	return 0;
 }
 
+static int get_library_names(const char *buf, int *len)
+{
+	int i = 0, j = 0;
+	const char *ptr = buf;
+	*len = 0;
+	while(i < MAX_NUM_LIBS) {
+		if(*ptr == '\0') {
+			/* done */
+			(*len)++;
+			return 1;
+		}
+		(*len)++;
+		if(*ptr == ' ') {
+			/* next lib */
+			ptr++;
+			if(j == 0) {
+				return 0;
+			}
+			else {
+				j = 0;
+				i++;
+			}
+		}
+		else {
+			/* copy character */
+			libraries[i].libname[j] = *ptr;
+			ptr++;
+			j++;
+			if(j >= MAX_LIBNAME_LENGTH)
+				return 0;
+		}
+	}
+	return 0;
+}
+
+static void make_lib_filename(const char *libname, char *buf, size_t n)
+{
+	snprintf(buf, n - 1, "lib%s.so",
+			libname);
+	buf[n - 1] = '\0';
+}
+
 int parse_buffer(const char *buf, int bufsize)
 {
-	void *dlhandle;
 	int ret;
 
-	dlhandle = dlopen("libtest.so", RTLD_LAZY);
-	if(!dlhandle) {
-		dlhandle = dlopen("libtest.so.6", RTLD_LAZY);
-		if(!dlhandle)
-			fprintf(stderr, "%s\n",
-					dlerror());
+	int correct_magic = bufsize > 4;
+	int vers;
+	int lib_length = 0;
+	int lib_index = 0;
+
+	if(!correct_magic) {
+		fprintf(stderr, "Not a valid LVM bytecode file.\n");
+		return 1;
 	}
-	if(setup_functions(buf, dlhandle, bufsize)) {
+
+	correct_magic = buf[0] == MAGIC_00 &&
+		buf[1] == MAGIC_01 &&
+		buf[2] == MAGIC_02 &&
+		buf[3] == MAGIC_03;
+	if(!correct_magic) {
+		fprintf(stderr, "Not a valid LVM bytecode file.\n");
+		return 1;
+	}
+
+	vers = buf[4];
+	if(vers != CURRENT_VERSION) {
+		fprintf(stderr, "Bytecode has version %d. Only "
+			       "version %d is supported.\n",
+			       vers, CURRENT_VERSION);
+		return 1;
+	}
+
+	if(!get_library_names(&buf[5], &lib_length)) {
+		fprintf(stderr, "Invalid library configuration.\n");
+		return 1;
+	}
+
+	while(lib_index < MAX_NUM_LIBS && libraries[lib_index].libname[0]) {
+		char libbufname[256];
+		make_lib_filename(libraries[lib_index].libname,
+				libbufname, 256);
+		libraries[lib_index].dlhandle = dlopen(libbufname,
+				RTLD_LAZY);
+		if(!libraries[lib_index].dlhandle)
+			fprintf(stderr, "%s\n", dlerror());
+		lib_index++;
+	}
+
+	buf += 5 + lib_length;
+	bufsize -= 5 + lib_length;
+
+	if(setup_functions(buf, bufsize)) {
 		ret = 1;
 		goto cleanup;
 	}
 	ret = run_code(buf, bufsize);
 
 cleanup:
-	if(dlhandle)
-		dlclose(dlhandle);
+	while(lib_index < MAX_NUM_LIBS && libraries[lib_index].libname[0]) {
+		if(libraries[lib_index].dlhandle)
+			dlclose(libraries[lib_index].dlhandle);
+		lib_index++;
+	}
+
 	return ret;
 }
 
