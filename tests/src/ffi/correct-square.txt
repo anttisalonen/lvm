@@ -1,0 +1,2 @@
+I, square, was called!
+[0] INT 16

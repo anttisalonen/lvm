@@ -58,7 +58,7 @@ $(TESTSTYPEINFBINDIR):
 $(BINDIR):
 	@mkdir -p $(BINDIR)
 
-tests: stack-tests correct-tests type-error-tests type-inf-tests
+tests: stack-tests correct-tests type-error-tests type-inf-tests ffi-tests
 
 runtests = \
 	rm -f $(2)/result-*.txt; \
@@ -101,9 +101,23 @@ type-error-tests: $(TESTSTYPEERRORBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDI
 type-inf-tests: $(TESTSTYPEINFBINDIR) $(BINDIR)/stau $(BINDIR)/stack $(BINDIR)/stack-gen
 	@$(call runtests, $(TESTSTYPEINFSRCDIR), $(TESTSTYPEINFBINDIR))
 
+ffi-tests: ffi-square
+
+tests/bin/ffi:
+	@mkdir -p $@
+
+libsquare.so: tests/bin/ffi tests/src/ffi/square.c
+	@$(CC) -shared -Wl,-soname,libsquare.so -o tests/bin/ffi/libsquare.so tests/src/ffi/square.c
+
+ffi-square: $(BINDIR)/stack $(BINDIR)/stack-gen tests/bin/ffi tests/src/ffi/square.sta tests/src/ffi/correct-square.txt libsquare.so
+	@$(BINDIR)/stack-gen square < tests/src/ffi/square.sta > tests/bin/ffi/sq.st
+	@LD_LIBRARY_PATH=tests/bin/ffi $(BINDIR)/stack tests/bin/ffi/sq.st > tests/bin/ffi/result-square.txt 2>&1
+	@cmp tests/src/ffi/correct-square.txt tests/bin/ffi/result-square.txt
+
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o \
-		$(TESTSSTACKBINDIR) $(TESTSCORRECTBINDIR) $(TESTSTYPEERRORBINDIR) $(TESTSTYPEINFBINDIR) $(STACKOBJS) $(STACKGENOBJS)
+		$(TESTSSTACKBINDIR) $(TESTSCORRECTBINDIR) $(TESTSTYPEERRORBINDIR) \
+		$(TESTSTYPEINFBINDIR) tests/bin/ffi $(STACKOBJS) $(STACKGENOBJS)
 
-.PHONY: clean tests
+.PHONY: clean tests ffi-tests
 
