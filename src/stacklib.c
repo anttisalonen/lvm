@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dlfcn.h>
+
+#include <ffi.h>
 
 #include "stack.h"
 
@@ -56,10 +59,51 @@ typedef struct {
 
 #define MAX_NUM_FUNCTIONS 1024
 
+enum ffitype {
+	ffitype_void,
+	ffitype_uint8,
+	ffitype_sint8,
+	ffitype_uint16,
+	ffitype_sint16,
+	ffitype_uint32,
+	ffitype_sint32,
+	ffitype_uint64,
+	ffitype_sint64,
+	ffitype_float,
+	ffitype_double,
+	ffitype_uchar,
+	ffitype_schar,
+	ffitype_ushort,
+	ffitype_sshort,
+	ffitype_uint,
+	ffitype_sint,
+	ffitype_ulong,
+	ffitype_slong,
+	ffitype_longdouble,
+	ffitype_pointer,
+};
+
 typedef struct {
-	int start_addr;
+	int ffi;
 	uint16_t num_params;
+	union {
+		struct {
+			int start_addr;
+		} native;
+		struct {
+			void *ffiptr;
+			enum ffitype rettype;
+			enum ffitype params[MAX_NUM_FFI_PARAMETERS];
+			ffi_type *args[MAX_NUM_FFI_PARAMETERS];
+			ffi_cif cif;
+		} ffi;
+	} call;
 } fundata;
+
+static int fun_in_use(const fundata *f)
+{
+	return f->ffi || f->call.native.start_addr;
+}
 
 static fundata functions[MAX_NUM_FUNCTIONS];
 
@@ -371,6 +415,130 @@ static int open_closure(int clsdepth, stackvalue *stack, int *sp, int *pc,
 	return 0;
 }
 
+static int32_t convert_from_ffi(int *rc, enum ffitype t)
+{
+	switch(t) {
+		case ffitype_uint8:
+			return *(uint8_t*)rc;
+		case ffitype_sint8:
+			return *(int8_t*)rc;
+		case ffitype_uint16:
+			return *(uint16_t*)rc;
+		case ffitype_sint16:
+			return *(int16_t*)rc;
+		case ffitype_uint32:
+			return *(uint32_t*)rc;
+		case ffitype_sint32:
+			return *(int32_t*)rc;
+		case ffitype_uint64:
+			return *(uint64_t*)rc;
+		case ffitype_sint64:
+			return *(int64_t*)rc;
+		case ffitype_float:
+			return *(float*)rc;
+		case ffitype_double:
+			return *(double*)rc;
+		case ffitype_uchar:
+			return *(unsigned char*)rc;
+		case ffitype_schar:
+			return *(signed char*)rc;
+		case ffitype_ushort:
+			return *(unsigned short*)rc;
+		case ffitype_sshort:
+			return *(signed short*)rc;
+		case ffitype_uint:
+			return *(unsigned int*)rc;
+		case ffitype_sint:
+			return *(signed int*)rc;
+		case ffitype_ulong:
+			return *(unsigned long*)rc;
+		case ffitype_slong:
+			return *(signed long*)rc;
+		case ffitype_longdouble:
+			return *(long double*)rc;
+		case ffitype_pointer:
+			fprintf(stderr, "Unable to convert FFI pointers\n");
+			abort();
+			return 0;
+		case ffitype_void:
+		default:
+			fprintf(stderr, "Unable to convert FFI void value\n");
+			return 0;
+	}
+}
+
+static void convert_to_ffi(void **value, int32_t intvalue,
+		enum ffitype ffitype)
+{
+	switch(ffitype) {
+		case ffitype_uint8:
+			*(uint8_t*)value = (uint8_t)intvalue;
+			break;
+		case ffitype_sint8:
+			*(int8_t*)value = (int8_t)intvalue;
+			break;
+		case ffitype_uint16:
+			*(uint16_t*)value = (uint16_t)intvalue;
+			break;
+		case ffitype_sint16:
+			*(int16_t*)value = (int16_t)intvalue;
+			break;
+		case ffitype_uint32:
+			*(uint32_t*)value = (uint32_t)intvalue;
+			break;
+		case ffitype_sint32:
+			**(int32_t**)value = (int32_t)intvalue;
+			break;
+		case ffitype_uint64:
+			*(uint64_t*)value = (uint64_t)intvalue;
+			break;
+		case ffitype_sint64:
+			*(int64_t*)value = (int64_t)intvalue;
+			break;
+		case ffitype_float:
+			*(float*)value = (float)intvalue;
+			break;
+		case ffitype_double:
+			*(double*)value = (double)intvalue;
+			break;
+		case ffitype_uchar:
+			*(unsigned char*)value = (unsigned char)intvalue;
+			break;
+		case ffitype_schar:
+			*(signed char*)value = (signed char)intvalue;
+			break;
+		case ffitype_ushort:
+			*(unsigned short*)value = (unsigned short)intvalue;
+			break;
+		case ffitype_sshort:
+			*(signed short*)value = (signed short)intvalue;
+			break;
+		case ffitype_uint:
+			*(unsigned int*)value = (unsigned int)intvalue;
+			break;
+		case ffitype_sint:
+			*(signed int*)value = (signed int)intvalue;
+			break;
+		case ffitype_ulong:
+			*(unsigned long*)value = (unsigned long)intvalue;
+			break;
+		case ffitype_slong:
+			*(signed long*)value = (signed long)intvalue;
+			break;
+		case ffitype_longdouble:
+			*(long double*)value = (long double)intvalue;
+			break;
+		case ffitype_pointer:
+			fprintf(stderr, "Unable to convert FFI pointers\n");
+			abort();
+			break;
+		case ffitype_void:
+		default:
+			fprintf(stderr, "Unable to convert FFI void value\n");
+			break;
+	}
+}
+
 static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufsize,
 		int *interp, stackvalue *stack, int *sp)
 {
@@ -464,11 +632,42 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 				*sv = stack[*sp - 1];
 				(*sp)--;
 			}
-			return_depth++;
-			return_points[return_depth].ret_addr = *pc;
-			return_points[return_depth].fp = *sp;
-			return_points[return_depth].fun_number = sv->value.intvalue - 1;
-			*pc = functions[sv->value.intvalue - 1].start_addr;
+			if(!functions[sv->value.intvalue - 1].ffi) {
+				return_depth++;
+				return_points[return_depth].ret_addr = *pc;
+				return_points[return_depth].fp = *sp;
+				return_points[return_depth].fun_number = sv->value.intvalue - 1;
+				*pc = functions[sv->value.intvalue - 1].call.native.start_addr;
+			}
+			else {
+				/* FFI call */
+				int rc[16]; /* large enough */
+				void *values[MAX_NUM_FFI_PARAMETERS];
+				int i = 0;
+				enum ffitype paramtype;
+				fundata *fun = &functions[sv->value.intvalue - 1];
+				paramtype = fun->call.ffi.params[0];
+				for(i = 0; i < fun->num_params; i++) {
+					if(*sp < 1)
+						return 1;
+					if(!stackvalue_is_int(&stack[*sp - 1]))
+						return 1;
+					convert_to_ffi(&values[i], stack[*sp - 1].value.intvalue,
+							paramtype);
+					(*sp)--;
+					i++;
+					paramtype = fun->call.ffi.params[i];
+				}
+				ffi_call(&fun->call.ffi.cif, fun->call.ffi.ffiptr,
+						&rc, values);
+				if(fun->call.ffi.rettype != ffitype_void) {
+					int32_t i1 = convert_from_ffi(rc,
+							fun->call.ffi.rettype);
+					stack[*sp].vt = valuetype_int;
+					stack[*sp].value.intvalue = i1;
+					(*sp)++;
+				}
+			}
 			return 0;
 		case OPCODE_BRANCHNZ:
 			*interp = 0;
@@ -789,7 +988,7 @@ static int interpret(const stackvalue *sv, stackvalue *stack, int *sp, int *pc)
 
 static int run_code(const char *buf, unsigned int bufsize)
 {
-	pc = functions[0].start_addr;
+	pc = functions[0].call.native.start_addr;
 	sp = 0;
 	return_points[0].fp = 0;
 	while((pc != bufsize && pc != -1) || (sp > 0 &&
@@ -831,11 +1030,177 @@ static void get_unsigned_shorts(const char *buf, int *pc,
 	return;
 }
 
+static ffi_type *ffi_enum_to_ffitype(enum ffitype t)
+{
+	switch(t) {
+		case ffitype_uint8:
+			return &ffi_type_uint8;
+		case ffitype_sint8:
+			return &ffi_type_sint8;
+		case ffitype_uint16:
+			return &ffi_type_uint16;
+		case ffitype_sint16:
+			return &ffi_type_sint16;
+		case ffitype_uint32:
+			return &ffi_type_uint32;
+		case ffitype_sint32:
+			return &ffi_type_sint32;
+		case ffitype_uint64:
+			return &ffi_type_uint64;
+		case ffitype_sint64:
+			return &ffi_type_sint64;
+		case ffitype_float:
+			return &ffi_type_float;
+		case ffitype_double:
+			return &ffi_type_double;
+		case ffitype_uchar:
+			return &ffi_type_uchar;
+		case ffitype_schar:
+			return &ffi_type_schar;
+		case ffitype_ushort:
+			return &ffi_type_ushort;
+		case ffitype_sshort:
+			return &ffi_type_sshort;
+		case ffitype_uint:
+			return &ffi_type_uint;
+		case ffitype_sint:
+			return &ffi_type_sint;
+		case ffitype_ulong:
+			return &ffi_type_ulong;
+		case ffitype_slong:
+			return &ffi_type_slong;
+		case ffitype_longdouble:
+			return &ffi_type_longdouble;
+		case ffitype_pointer:
+			return &ffi_type_pointer;
+		case ffitype_void:
+			return &ffi_type_void;
+		default:
+			fprintf(stderr, "Unknown FFI type\n");
+			return NULL;
+	}
+}
+
+static int prep_ffi_cif(int fun_number)
+{
+	int i;
+	for(i = 0; i < functions[fun_number - 1].num_params; i++) {
+		functions[fun_number - 1].call.ffi.args[i] =
+			ffi_enum_to_ffitype(functions[fun_number - 1].call.ffi.params[i]);
+	}
+	return ffi_prep_cif(&functions[fun_number - 1].call.ffi.cif,
+			FFI_DEFAULT_ABI, 1,
+			ffi_enum_to_ffitype(functions[fun_number - 1].call.ffi.rettype),
+			functions[fun_number - 1].call.ffi.args) == FFI_OK;
+}
+
+static int add_ffidef(const char *buf, int *pc, int bufsize,
+		void *dlhandle)
+{
+	enum ffitype ffi_rettype;
+	uint16_t ffi_ret;
+	uint16_t fun_number;
+	int more_params = 1;
+	ffi_type *ffitype;
+	int num_params = 0;
+	char ffiname[128];
+	int i;
+	void *ffiptr;
+	char *dlerr;
+
+	if(*pc + 4 >= bufsize)
+		return 1;
+
+	get_unsigned_shorts(buf, pc, &fun_number, &ffi_ret);
+	ffi_rettype = ffi_ret;
+	ffitype = ffi_enum_to_ffitype(ffi_rettype);
+	if(!ffitype) {
+		fprintf(stderr, "FFI return type 0x%02x is invalid\n",
+				ffi_rettype);
+		return 1;
+	}
+	else {
+		functions[fun_number - 1].call.ffi.rettype = ffi_rettype;
+	}
+
+	if(fun_number >= MAX_NUM_FUNCTIONS)
+		return 1;
+	if(fun_number <= 0)
+		return 1;
+
+	if(fun_in_use(&functions[fun_number - 1])) {
+		fprintf(stderr, "FFI function %d in use\n",
+				fun_number);
+		return 1;
+	}
+
+	/* parameters */
+	memset(functions[fun_number - 1].call.ffi.params,
+			0x00, sizeof(functions[fun_number - 1].call.ffi.params));
+
+	while(more_params) {
+		for(i = 0; i < 4 && *pc < bufsize; i++, (*pc)++) {
+			ffitype = ffi_enum_to_ffitype(buf[*pc]);
+			if(!ffitype) {
+				fprintf(stderr, "FFI parameter 0x%02x is invalid\n",
+						buf[*pc]);
+				return 1;
+			}
+			if(more_params) {
+				functions[fun_number - 1].call.ffi.params[num_params] = buf[*pc];
+				num_params++;
+			}
+			if(functions[fun_number - 1].call.ffi.params[num_params] == ffitype_void)
+				more_params = 0;
+		}
+		if(num_params + 4 < MAX_NUM_FFI_PARAMETERS)
+			more_params = 0;
+	}
+
+	/* function name */
+	memset(ffiname, 0x00, sizeof(ffiname));
+	i = 0;
+	while(i < sizeof(ffiname) - 1 && *pc < bufsize && buf[*pc]) {
+		ffiname[i] = buf[*pc];
+		i++;
+		(*pc)++;
+	}
+	if(i == sizeof(ffiname) - 1) {
+		fprintf(stderr, "Too long FFI name (max length: %d characters)\n",
+				sizeof(ffiname - 1));
+		return 1;
+	}
+
+	if(!dlhandle) {
+		fprintf(stderr, "Dynamic library handle not initialized.\n");
+		return 1;
+	}
+	dlerror();
+	ffiptr = dlsym(dlhandle, ffiname);
+	dlerr = dlerror();
+	if(dlerr) {
+		fprintf(stderr, "Could not find function '%s': %s\n",
+				ffiname, dlerr);
+		return 1;
+	}
+
+	functions[fun_number - 1].ffi = 1;
+	functions[fun_number - 1].call.ffi.ffiptr = ffiptr;
+	functions[fun_number - 1].num_params = num_params;
+	if(!prep_ffi_cif(fun_number)) {
+		fprintf(stderr, "ffi_prep_cif failed\n");
+		return 1;
+	}
+
+	return 0;
+}
+
 static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
-		int *current_fundef)
+		void *dlhandle, int *current_fundef)
 {
 	uint16_t fun_number;
 	uint16_t fun_params;
+
 	switch(buf[*pc]) {
 		case OPCODE_DEFUN_START:
 			if(*current_fundef) {
@@ -850,9 +1215,10 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 				return 1;
 			if(fun_number <= 0)
 				return 1;
-			if(functions[fun_number - 1].start_addr != 0)
+			if(fun_in_use(&functions[fun_number - 1]))
 				return 1;
-			functions[fun_number - 1].start_addr = *pc;
+			functions[fun_number - 1].ffi = 0;
+			functions[fun_number - 1].call.native.start_addr = *pc;
 			functions[fun_number - 1].num_params = fun_params;
 			*current_fundef = fun_number;
 			return 0;
@@ -864,6 +1230,13 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 			*current_fundef = 0;
 			(*pc)++;
 			return 0;
+		case OPCODE_FFIDEF:
+			if(*current_fundef) {
+				fprintf(stderr, "FFI definition within a function definition\n");
+				return 1;
+			}
+			(*pc)++;
+			return add_ffidef(buf, pc, bufsize, dlhandle);
 		default:
 			fprintf(stderr, "Unexpected opcode at 0x%x: 0x%x\n",
 					*pc, buf[*pc]);
@@ -871,13 +1244,13 @@ static int get_fundef(const char *buf, int *pc, unsigned int bufsize,
 	}
 }
 
-static int setup_functions(const char *buf, int bufsize)
+static int setup_functions(const char *buf, void *dlhandle, int bufsize)
 {
 	int pc = 0;
 	int current_fundef = 0;
 	while(pc != bufsize) {
 		if(get_fun_value(buf, &pc, bufsize)) {
-			if(get_fundef(buf, &pc, bufsize, &current_fundef)) {
+			if(get_fundef(buf, &pc, bufsize, dlhandle, &current_fundef)) {
 				fprintf(stderr, "Invalid function definition (function %d)\n",
 						current_fundef);
 				return 1;
@@ -889,9 +1262,26 @@ static int setup_functions(const char *buf, int bufsize)
 
 int parse_buffer(const char *buf, int bufsize)
 {
-	if(setup_functions(buf, bufsize))
-		return 1;
-	return run_code(buf, bufsize);
+	void *dlhandle;
+	int ret;
+
+	dlhandle = dlopen("libtest.so", RTLD_LAZY);
+	if(!dlhandle) {
+		dlhandle = dlopen("libtest.so.6", RTLD_LAZY);
+		if(!dlhandle)
+			fprintf(stderr, "%s\n",
+					dlerror());
+	}
+	if(setup_functions(buf, dlhandle, bufsize)) {
+		ret = 1;
+		goto cleanup;
+	}
+	ret = run_code(buf, bufsize);
+
+cleanup:
+	if(dlhandle)
+		dlclose(dlhandle);
+	return ret;
 }
 
 int parse_file(const char *filename)

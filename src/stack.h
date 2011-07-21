@@ -28,6 +28,12 @@
 #define OPCODE_PFUN_ID		0x51
 #define OPCODE_START_THUNK	0x52
 #define OPCODE_END_THUNK	0x53
+#define OPCODE_FFIDEF		0x54
+
+/* should do for now */
+/* the maximum is actually one less.
+   The last slot is zero. */
+#define MAX_NUM_FFI_PARAMETERS	16
 
 #endif
 

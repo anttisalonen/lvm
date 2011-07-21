@@ -1,5 +1,6 @@
 BINDIR = bin
-CFLAGS ?= -Wall -O2
+CFLAGS ?= -O2
+CFLAGS += -Wall
 CC     = gcc
 HAPPY  = happy
 HC     = ghc
@@ -7,6 +8,8 @@ HFLAGS ?= -Wall -O --make
 
 SRCDIR  = src
 STAUDIR = $(SRCDIR)/stau
+
+LDFLAGS += -ldl -lffi
 
 TESTDIR = tests/src
 TESTSCORRECTBINDIR = tests/bin/correct
@@ -30,7 +33,7 @@ $(BINDIR)/stack-gen: $(STACKGENOBJS)
 
 $(BINDIR)/stack $(BINDIR)/stack-gen:
 	@mkdir -p $(BINDIR)
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
 
 $(STACKOBJS) $(STACKGENOBJS): $(SRCDIR)/stack.h $(SRCDIR)/stacklib.h
 
