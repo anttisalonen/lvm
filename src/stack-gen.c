@@ -90,25 +90,33 @@ void output_char(char ch)
 	}
 }
 
-void output_until_space(const char *str)
+void output_header(char ch)
+{
+	putc(ch, stdout);
+}
+
+void output_until_space(const char *str, int header)
 {
 	while(!isspace(*str) && *str != '\0') {
-		output_char(*str);
+		if(!header)
+			output_char(*str);
+		else
+			output_header(*str);
 		str++;
 	}
 }
 
 void output_version(void)
 {
-	output_char(CURRENT_VERSION);
+	output_header(CURRENT_VERSION);
 }
 
 void output_magic(void)
 {
-	output_char(MAGIC_00);
-	output_char(MAGIC_01);
-	output_char(MAGIC_02);
-	output_char(MAGIC_03);
+	output_header(MAGIC_00);
+	output_header(MAGIC_01);
+	output_header(MAGIC_02);
+	output_header(MAGIC_03);
 }
 
 void output_nums(char opcode, int a, int b)
@@ -251,7 +259,7 @@ int handle_ffidef(const char *buf)
 		else
 			output_char(0);
 	}
-	output_until_space(numptr);
+	output_until_space(numptr, 0);
 	sync_output();
 	reset_labels();
 	return 1;
@@ -269,10 +277,10 @@ int main(int argc, char **argv)
 		output_version();
 		for(lib_index = 1; lib_index < MAX_NUM_LIBS && lib_index < argc;
 				lib_index++) {
-			output_until_space(argv[lib_index]);
-			output_char(' ');
+			output_until_space(argv[lib_index], 1);
+			output_header(' ');
 		}
-		output_char('\0');
+		output_header('\0');
 	}
 	while(1) {
 		int emptyline;
