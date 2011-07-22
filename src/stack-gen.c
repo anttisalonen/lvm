@@ -90,19 +90,46 @@ void output_char(char ch)
 	}
 }
 
+void output_header(char ch)
+{
+	putc(ch, stdout);
+}
+
+void output_until_space(const char *str, int header)
+{
+	while(!isspace(*str) && *str != '\0') {
+		if(!header)
+			output_char(*str);
+		else
+			output_header(*str);
+		str++;
+	}
+}
+
+void output_version(void)
+{
+	output_header(CURRENT_VERSION);
+}
+
+void output_magic(void)
+{
+	output_header(MAGIC_00);
+	output_header(MAGIC_01);
+	output_header(MAGIC_02);
+	output_header(MAGIC_03);
+}
+
 void output_nums(char opcode, int a, int b)
 {
 	char buf[4];
 	int i;
 	output_char(opcode);
 	num_to_be(a, 2, buf);
-	for(i = 0; i < 2; i++) {
+	for(i = 0; i < 2; i++)
 		output_char(buf[i]);
-	}
 	num_to_be(b, 2, buf);
-	for(i = 0; i < 2; i++) {
+	for(i = 0; i < 2; i++)
 		output_char(buf[i]);
-	}
 }
 
 void output_be(long int num)
@@ -195,12 +222,66 @@ int output_offset(const char *buf, const char *mnemonic,
 		return 0;
 }
 
+int handle_ffidef(const char *buf)
+{
+	int parsed_funnum;
+	unsigned char types[MAX_NUM_FFI_PARAMETERS];
+	int i = 0, j = 0;
+	long int val;
+	const char *numptr = buf;
+	memset(types, 0x00, sizeof(types));
+	char *endptr;
+	parsed_funnum = strtol(numptr, &endptr, 0);
+	if(endptr == numptr || !parsed_funnum)
+		return 0;
+	numptr++;
+	do {
+		val = strtol(numptr, &endptr, 0);
+		if(endptr == numptr)
+			return 0;
+		types[i] = val;
+		numptr = endptr + 1;
+		i++;
+	} while(i < sizeof(types) - 1 && (!i || val != 0));
+	output_nums(OPCODE_FFIDEF, parsed_funnum, types[0]);
+	for(j = 1; j < i; j += 4) {
+		output_char(types[j]);
+		if(j + 1 < i)
+			output_char(types[j + 1]);
+		else
+			output_char(0);
+		if(j + 2 < i)
+			output_char(types[j + 2]);
+		else
+			output_char(0);
+		if(j + 3 < i)
+			output_char(types[j + 3]);
+		else
+			output_char(0);
+	}
+	output_until_space(numptr, 0);
+	sync_output();
+	reset_labels();
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	char buf[1024];
 	int fundef = 0;
 	interactive = argc > 1 && !strncmp(argv[1], "-i", 2);
 	reset_labels();
+	if(!interactive) {
+		int lib_index = 1;
+		output_magic();
+		output_version();
+		for(lib_index = 1; lib_index < MAX_NUM_LIBS && lib_index < argc;
+				lib_index++) {
+			output_until_space(argv[lib_index], 1);
+			output_header(' ');
+		}
+		output_header('\0');
+	}
 	while(1) {
 		int emptyline;
 		if(interactive) {
@@ -307,6 +388,17 @@ int main(int argc, char **argv)
 				fprintf(stderr, "?\n");
 			else
 				output_num(OPCODE_LOAD, parsed_num);
+		}
+		else if(!strncmp(buf, "FFIDEF ", 7)) {
+			if(fundef) {
+				fprintf(stderr, "?\n");
+			}
+			else {
+				int succ = handle_ffidef(buf + 7);
+				if(!succ) {
+					fprintf(stderr, "FFIDEF?\n");
+				}
+			}
 		}
 		else if(buf[0] == 'f') {
 			int succ;

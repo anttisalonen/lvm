@@ -28,6 +28,22 @@
 #define OPCODE_PFUN_ID		0x51
 #define OPCODE_START_THUNK	0x52
 #define OPCODE_END_THUNK	0x53
+#define OPCODE_FFIDEF		0x54
+
+/* should do for now */
+/* the maximum is actually one less.
+   The last slot is zero. */
+#define MAX_NUM_FFI_PARAMETERS	16
+
+#define MAGIC_00	0x6c
+#define MAGIC_01	0x53
+#define MAGIC_02	0x2e
+#define MAGIC_03	0x46
+
+#define CURRENT_VERSION	0x00
+
+#define MAX_NUM_LIBS		16
+#define MAX_LIBNAME_LENGTH	16
 
 #endif
 
