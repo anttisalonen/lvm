@@ -112,7 +112,8 @@ libsquare.so: tests/bin/ffi tests/src/ffi/square.c
 ffi-square: $(BINDIR)/stack $(BINDIR)/stack-gen tests/bin/ffi tests/src/ffi/square.sta tests/src/ffi/correct-square.txt libsquare.so
 	@$(BINDIR)/stack-gen square < tests/src/ffi/square.sta > tests/bin/ffi/sq.st
 	@LD_LIBRARY_PATH=tests/bin/ffi $(BINDIR)/stack tests/bin/ffi/sq.st > tests/bin/ffi/result-square.txt 2>&1
-	@cmp tests/src/ffi/correct-square.txt tests/bin/ffi/result-square.txt
+	@(cmp -s tests/src/ffi/correct-square.txt tests/bin/ffi/result-square.txt && echo "ffi-square successful") \
+		|| echo "ffi-square failed"
 
 clean:
 	rm -rf $(BINDIR) $(STAUDIR)/ParseStau.hs $(STAUDIR)/*.hi $(STAUDIR)/*.o \
