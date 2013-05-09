@@ -1,15 +1,21 @@
 BINDIR = bin
 CFLAGS ?= -O2
 CFLAGS += -Wall
-CC     = gcc
+CFLAGS += -Wall -Werror
+CC     ?= gcc
 HAPPY  = happy
 HC     = ghc
-HFLAGS ?= -Wall -O --make
+HFLAGS ?= -Wall -Werror
+HFLAGS += -O --make
 
 SRCDIR  = src
 STAUDIR = $(SRCDIR)/stau
 
-LDFLAGS += -ldl -lffi
+
+LDFLAGS += -ldl
+LDFLAGS += $(shell pkg-config --libs libffi)
+
+CFLAGS += $(shell pkg-config --cflags libffi)
 
 TESTDIR = tests/src
 TESTSCORRECTBINDIR = tests/bin/correct
@@ -107,7 +113,7 @@ tests/bin/ffi:
 	@mkdir -p $@
 
 libsquare.so: tests/bin/ffi tests/src/ffi/square.c
-	@$(CC) -shared -Wl,-soname,libsquare.so -o tests/bin/ffi/libsquare.so tests/src/ffi/square.c
+	@$(CC) -shared -Wl,-soname,libsquare.so -fPIC -o tests/bin/ffi/libsquare.so tests/src/ffi/square.c
 
 ffi-square: $(BINDIR)/stack $(BINDIR)/stack-gen tests/bin/ffi tests/src/ffi/square.sta tests/src/ffi/correct-square.txt libsquare.so
 	@$(BINDIR)/stack-gen square < tests/src/ffi/square.sta > tests/bin/ffi/sq.st
