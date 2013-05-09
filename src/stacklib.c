@@ -467,7 +467,7 @@ static int32_t convert_from_ffi(int *rc, enum ffitype t)
 	}
 }
 
-static void convert_to_ffi(void **value, int32_t intvalue,
+static void convert_to_ffi(int *value, int32_t intvalue,
 		enum ffitype ffitype)
 {
 	switch(ffitype) {
@@ -487,7 +487,7 @@ static void convert_to_ffi(void **value, int32_t intvalue,
 			*(uint32_t*)value = (uint32_t)intvalue;
 			break;
 		case ffitype_sint32:
-			**(int32_t**)value = (int32_t)intvalue;
+			*(int32_t*)value = (int32_t)intvalue;
 			break;
 		case ffitype_uint64:
 			*(uint64_t*)value = (uint64_t)intvalue;
@@ -642,7 +642,8 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 			else {
 				/* FFI call */
 				int rc[16]; /* large enough */
-				void *values[MAX_NUM_FFI_PARAMETERS];
+				int intvalues[MAX_NUM_FFI_PARAMETERS];
+				void *ffivalues[MAX_NUM_FFI_PARAMETERS];
 				int i = 0;
 				enum ffitype paramtype;
 				fundata *fun = &functions[sv->value.intvalue - 1];
@@ -652,14 +653,15 @@ static int get_value(const char *buf, stackvalue *sv, int *pc, unsigned int bufs
 						return 1;
 					if(!stackvalue_is_int(&stack[*sp - 1]))
 						return 1;
-					convert_to_ffi(&values[i], stack[*sp - 1].value.intvalue,
+					convert_to_ffi(&intvalues[i], stack[*sp - 1].value.intvalue,
 							paramtype);
+					ffivalues[i] = &intvalues[i];
 					(*sp)--;
 					i++;
 					paramtype = fun->call.ffi.params[i];
 				}
 				ffi_call(&fun->call.ffi.cif, fun->call.ffi.ffiptr,
-						&rc, values);
+						&rc, ffivalues);
 				if(fun->call.ffi.rettype != ffitype_void) {
 					int32_t i1 = convert_from_ffi(rc,
 							fun->call.ffi.rettype);
