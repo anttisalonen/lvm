@@ -355,11 +355,6 @@ addLocalVar n (Just (i, t)) = do
   sh <- stackHeight <$> get
   modify $ \c -> c{variables = variables c `M.union` M.fromList [(n, RefVariable [(sh - 2, 4 * paramIndexToAddr i t)])]}
 
-getLocalVar :: String -> State CompileState [Opcode]
-getLocalVar str = do
-  vars <- variables <$> get
-  genVarAsm $ vars M.! str
-
 getConstructorEnum :: DataDecl -> Constructor -> Maybe Int
 getConstructorEnum dt cn =
   let conss = dataConstructors dt
