@@ -224,7 +224,7 @@ static void print_stackvalue(const stackvalue *sv, int sp,
 			}
 			else {
 				int i;
-				fprintf(stderr, "REF %d of %d at %p\n",
+				fprintf(stderr, "REF %d of %zd at %p\n",
 						ref->reference_id,
 						ref->mem_size,
 						ref->allocated_object);
@@ -1172,7 +1172,7 @@ static int add_ffidef(const char *buf, int *pc, int bufsize)
 		(*pc)++;
 	}
 	if(i == sizeof(ffiname) - 1) {
-		fprintf(stderr, "Too long FFI name (max length: %d characters)\n",
+		fprintf(stderr, "Too long FFI name (max length: %zd characters)\n",
 				sizeof(ffiname - 1));
 		return 1;
 	}
