@@ -3,3 +3,4 @@ bin/
 *.o
 *.hi
 src/stau/ParseStau.hs
+tags
