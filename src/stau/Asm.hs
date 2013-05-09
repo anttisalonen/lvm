@@ -167,15 +167,15 @@ genFunctionAsm f = do
   modify $ \c -> c{numVars = numArgs, minVars = numArgs,
                    variables = initialVarMap `M.union` paramMap}
   fd <- addOp $ OpFunDef (funNumber fi) (-(funStackHeightDiff fi))
-  fds <- genExprAsm (getFunExp f)
+  fds <- genExprAsm True (getFunExp f)
   fe <- addOp $ if numArgs == 0 then OpFunEnd else OpRet1
   modify $ \c -> c{stackHeight = 0}
   return $ fd : fds ++ [fe]
 
-genArithAsm :: Opcode -> Exp -> Exp -> State CompileState [Opcode]
-genArithAsm op e1 e2 = thunk $ do
-  a1 <- genExprAsm e1
-  a2 <- genExprAsm e2
+genArithAsm :: Bool -> Opcode -> Exp -> Exp -> State CompileState [Opcode]
+genArithAsm lazy op e1 e2 = (if lazy then thunk else id) $ do
+  a1 <- genExprAsm True e1
+  a2 <- genExprAsm True e2
   rmVar
   opc <- addOp op
   return $ a1 ++ a2 ++ [opc]
@@ -189,29 +189,30 @@ thunk block = do
   let thn = OpThunkStart lbl
   return $ thn : bl ++ [thend]
 
-genExprAsm :: Exp -> State CompileState [Opcode]
-genExprAsm (Plus e1 e2)  = genArithAsm OpAdd e1 e2
-genExprAsm (Minus e1 e2) = genArithAsm OpSub e1 e2
-genExprAsm (Times e1 e2) = genArithAsm OpMul e1 e2
-genExprAsm (Div e1 e2)   = genArithAsm OpDiv e1 e2
-genExprAsm (Int i)       = addVar >> sequence [addOp $ OpInt i]
-genExprAsm (Brack e)     = genExprAsm e
+genExprAsm :: Bool -> Exp -> State CompileState [Opcode]
+genExprAsm lazy (Plus e1 e2)  = genArithAsm lazy OpAdd e1 e2
+genExprAsm lazy (Minus e1 e2) = genArithAsm lazy OpSub e1 e2
+genExprAsm lazy (Times e1 e2) = genArithAsm lazy OpMul e1 e2
+genExprAsm lazy (Div e1 e2)   = genArithAsm lazy OpDiv e1 e2
+genExprAsm _    (Int i)       = addVar >> sequence [addOp $ OpInt i]
+genExprAsm lazy (Brack e)     = genExprAsm lazy e
+genExprAsm _    (StrictExp e) = genExprAsm False e
 
-genExprAsm (IfThenElse e1 e2 e3) = do
-  o1 <- genExprAsm e1
+genExprAsm lazy (IfThenElse e1 e2 e3) = do
+  o1 <- genExprAsm lazy e1
   rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
   elseDrops <- addDrops
-  elseBr <- genExprAsm e3
+  elseBr <- genExprAsm lazy e3
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
-  thenBr <- genExprAsm e2
+  thenBr <- genExprAsm lazy e2
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
   return $ concat [o1, br1, elseDrops, elseBr, br2, thenBr]
 
-genExprAsm (Variable vn) = do
+genExprAsm lazy (Variable vn) = do
   fm <- functions <$> get
   vars <- variables <$> get
   case M.lookup vn vars of
@@ -219,9 +220,9 @@ genExprAsm (Variable vn) = do
       case M.lookup vn fm of
         Nothing -> icError $ "Variable \"" ++ vn ++ "\" not defined"
         Just f  -> sequence [addOp . OpPFunID $ funNumber f]
-    Just v  -> genVarAsm v
+    Just v  -> genVarAsm lazy v
 
-genExprAsm (FunApp fn eps) = do
+genExprAsm lazy (FunApp fn eps) = do
   fm <- functions <$> get
   if null eps
     then do
@@ -231,27 +232,27 @@ genExprAsm (FunApp fn eps) = do
           case M.lookup fn fm of
             Nothing -> icError $ "Variable \"" ++ fn ++ "\" not defined"
             Just f  -> sequence [addOp $ OpFunCall f]
-        Just v  -> genVarAsm v
+        Just v  -> genVarAsm lazy v
     else do
-      params <- concat <$> mapM genExprAsm (reverse eps)
+      params <- concat <$> mapM (genExprAsm lazy) (reverse eps)
       fcall <- case M.lookup fn fm of
                  Nothing -> do
                    vars <- variables <$> get
                    case M.lookup fn vars of
                      Nothing -> icError $ "Function \"" ++ fn ++ "\" not defined"
-                     Just v  -> liftM2 (++) (genVarAsm v) (fmap (:[]) (addOp $ OpPFunCall numParams))
+                     Just v  -> liftM2 (++) (genVarAsm lazy v) (fmap (:[]) (addOp $ OpPFunCall numParams))
                        where numParams = length eps
                  Just f  -> sequence [addOp $ OpFunCall f]
       return $ params ++ fcall
 
-genExprAsm (DataCons consname exps) = do
+genExprAsm lazy (DataCons consname exps) = do
   consMap <- dtmap <$> get
   case M.lookup consname consMap of
     Nothing -> do
       vars <- variables <$> get
       case M.lookup consname vars of
         Nothing -> icError $ "undeclared data constructor " ++ consname
-        Just v  -> genVarAsm v
+        Just v  -> genVarAsm lazy v
     Just (dtt, _) -> do
       dataszs <- datasizes <$> get
       case M.lookup (dataDeclName dtt) dataszs of
@@ -278,38 +279,38 @@ genExprAsm (DataCons consname exps) = do
           params <- forM (zip [0..] exps) $ \(i, e) -> do
             odup <- addOp OpDup
             oidx <- addOp $ OpInt $ paramIndexToAddr i (hasMultipleConstructors dtt) * 4
-            ea <- genExprAsm e
+            ea <- genExprAsm lazy e
             ost <- addOp OpRStore
             return $ [odup, oidx] ++ ea ++ [ost]
           return $ osz ++ consasm ++ concat params
 
-genExprAsm (CmpLt e1 e2) = genArithAsm OpLT e1 e2
-genExprAsm (CmpLe e1 e2) = genArithAsm OpLE e1 e2
-genExprAsm (CmpEq e1 e2) = genArithAsm OpEQ e1 e2
-genExprAsm (Negate (Int i)) = addVar >> sequence [addOp $ OpInt (-i)]
-genExprAsm (Negate n)       = genArithAsm OpMul (Int (-1)) n
-genExprAsm (CaseOf e1 ps)   = do
-  ea <- genExprAsm e1
-  pa <- caseExprAsm ps
+genExprAsm lazy (CmpLt e1 e2) = genArithAsm lazy OpLT e1 e2
+genExprAsm lazy (CmpLe e1 e2) = genArithAsm lazy OpLE e1 e2
+genExprAsm lazy (CmpEq e1 e2) = genArithAsm lazy OpEQ e1 e2
+genExprAsm _    (Negate (Int i)) = addVar >> sequence [addOp $ OpInt (-i)]
+genExprAsm lazy (Negate n)       = genArithAsm lazy OpMul (Int (-1)) n
+genExprAsm lazy (CaseOf e1 ps)   = do
+  ea <- genExprAsm lazy e1
+  pa <- caseExprAsm lazy ps
   return $ ea ++ pa
 
-caseExprAsm :: [CasePattern] -> State CompileState [Opcode]
-caseExprAsm [] = liftM2 (:) (addOp OpDrop) patternMatchErrorAsm
-caseExprAsm (Case WildcardParam ex:_) = liftM2 (:) (addOp OpDrop) $ genExprAsm ex
-caseExprAsm (Case (VariableParam n) ex:_) = do
+caseExprAsm :: Bool -> [CasePattern] -> State CompileState [Opcode]
+caseExprAsm _    [] = liftM2 (:) (addOp OpDrop) patternMatchErrorAsm
+caseExprAsm lazy (Case WildcardParam ex:_) = liftM2 (:) (addOp OpDrop) $ genExprAsm lazy ex
+caseExprAsm lazy (Case (VariableParam n) ex:_) = do
   -- this is probably OK scope-wise..?
   addLocalVar n Nothing
-  liftM2 (:) (addOp OpDrop) $ genExprAsm ex
-caseExprAsm (Case (ConstructorParam sn ps) ex:cases) = do
+  liftM2 (:) (addOp OpDrop) $ genExprAsm lazy ex
+caseExprAsm lazy (Case (ConstructorParam sn ps) ex:cases) = do
   -- TODO: save match result to a temporary variable
   match <- matchAsm sn ps
   rmVar
   _  <- addOp $ OpBrNz 0 -- placeholder
-  elseBr <- caseExprAsm cases
+  elseBr <- caseExprAsm lazy cases
   _  <- addOp $ OpBr 0   -- placeholder
   l2 <- currPos <$> get
   thenDrops <- addDrops
-  thenBr <- liftM2 (++) (genExprAsm ex) $ sequence [addOp OpSwap, addOp OpDrop]
+  thenBr <- liftM2 (++) (genExprAsm lazy ex) $ sequence [addOp OpSwap, addOp OpDrop]
   l3 <- currPos <$> get
   let br1 = [OpBrNz l2]
       br2 = [OpBr l3]
@@ -378,11 +379,11 @@ icError msg = error $ "Internal compiler error on code generation: " ++ msg
 patternMatchErrorAsm :: State CompileState [Opcode]
 patternMatchErrorAsm = fmap return (addOp (OpInt 0)) -- TODO: implement exit() in VM
 
-genVarAsm :: AsmVariable -> State CompileState [Opcode]
-genVarAsm (StackVariable v) =
+genVarAsm :: Bool -> AsmVariable -> State CompileState [Opcode]
+genVarAsm _    (StackVariable v) =
   fmap (:[]) $ addOp (OpLoad v)
-genVarAsm (ExpVariable e)   = genExprAsm e
-genVarAsm (RefVariable rs)  =
+genVarAsm lazy (ExpVariable e)   = genExprAsm lazy e
+genVarAsm _    (RefVariable rs)  =
   concat <$> forM rs (\(stp, addr) -> do
     st <- addOp $ OpLoad stp
     ad <- addOp $ OpInt addr

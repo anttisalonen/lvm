@@ -6,9 +6,9 @@ map f l = case l of
 
 makeList i = makeList2 i 1
 
-makeList2 i j = if i <= 0 then Nil else Cons j (makeList2 (i - 1) (j + 1))
+makeList2 i j = if !(i <= 0) then Nil else Cons j (makeList2 !(i - 1) !(j + 1))
 
-square x = x * x
+square x = !(x * x)
 
 main = map square (makeList 10)
 

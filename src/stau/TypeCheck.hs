@@ -326,6 +326,7 @@ expType (DataCons n es) = do
       return dt
 
 expType (Brack e) = expType e
+expType (StrictExp e) = expType e
 expType (Negate e) = expType (Times (Int (-1)) e)
 
 expType (IfThenElse e1 e2 e3) = do

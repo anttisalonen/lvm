@@ -10,11 +10,11 @@ filter pred l = case l of
 
 makeList i = makeList2 i 1
 
-makeList2 i j = if i <= 0 then Nil else Cons j (makeList2 (i - 1) (j + 1))
+makeList2 i j = if !(i <= 0) then Nil else Cons j (makeList2 !(i - 1) !(j + 1))
 
-lessThan50 y = y < 50
+lessThan50 y = !(y < 50)
 
-square x = x * x
+square x = !(x * x)
 
 main = filter lessThan50 (map square (makeList 20))
 

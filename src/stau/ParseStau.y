@@ -51,6 +51,7 @@ import Stau
       '::'            { TokenTypeOf }
       '|'             { TokenPipe }
       ';'             { TokenSemicolon }
+      '!'             { TokenExclamationPoint }
       '_'             { TokenWildcard }
 %%
 
@@ -122,6 +123,7 @@ Exp  : Exp '+' Exp              { Plus $1 $3 }
      | Exp '<' Exp              { CmpLt $1 $3 }
      | int %prec VAR            { Int $1 }
      | '(' Exp ')'              { Brack $2 }
+     | '!' '(' Exp ')'          { StrictExp $3 }
      | var Atoms %prec AP       { FunApp $1 $2 }
      | typename Atoms %prec AP  { DataCons $1 $2 }
      | '-' Exp %prec NEG        { Negate $2 }
@@ -140,6 +142,7 @@ CasePattern : CaseParam '->' Exp { Case $1 $3 }
 Atom :: { Exp }
 Atom : int %prec VAR            { Int $1 }
      | '(' Exp ')'              { Brack $2 }
+     | '!' '(' Exp ')'          { StrictExp $3 }
      | typename                 { DataCons $1 [] }
      | var                      { Variable $1 }
 
@@ -212,6 +215,7 @@ stauLexer' line col (')':cs) = advToken 1 line col TokenCB cs
 stauLexer' line col ('{':cs) = advToken 1 line col TokenOCurly cs
 stauLexer' line col ('}':cs) = advToken 1 line col TokenCCurly cs
 stauLexer' line col (';':cs) = advToken 1 line col TokenSemicolon cs
+stauLexer' line col ('!':cs) = advToken 1 line col TokenExclamationPoint cs
 stauLexer' line col (c:_) = Left $ "stauLexer' says: Syntax error at `" ++ [c] ++ "'"
 
 lexNum line col cs = advToken (length num) line col (TokenInt (read num)) rest

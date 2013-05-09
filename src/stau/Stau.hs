@@ -61,6 +61,7 @@ data Exp
       | Variable String
       | DataCons String [Exp]
       | Brack Exp
+      | StrictExp Exp
       | Negate Exp
       | IfThenElse Exp Exp Exp
       | CaseOf Exp [CasePattern]
@@ -103,6 +104,7 @@ data Token
       | TokenCase
       | TokenOf
       | TokenSemicolon
+      | TokenExclamationPoint
   deriving (Eq, Show)
 
 

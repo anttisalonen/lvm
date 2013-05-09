@@ -1,7 +1,7 @@
 data Vector2 = Vector2 Int Int
 
 crossProd :: Vector2 -> Vector2 -> Vector2
-crossProd (Vector2 x1 y1) (Vector2 x2 y2) = Vector2 !(x1 * y2) !(y1 * x2)
+crossProd (Vector2 x1 y1) (Vector2 x2 y2) = Vector2 (x1 * y2) (y1 * x2)
 
 main = crossProd (Vector2 3 4) (Vector2 5 6)
 

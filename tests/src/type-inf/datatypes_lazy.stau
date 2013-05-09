@@ -1,6 +1,6 @@
 data Vector2 = Vector2 Int Int
 
-vecPlus (Vector2 x1 y1) (Vector2 x2 y2) = Vector2 !(x1 + x2) !(y1 + y2)
+vecPlus (Vector2 x1 y1) (Vector2 x2 y2) = Vector2 (x1 + x2) (y1 + y2)
 
 main = vecPlus (Vector2 3 4) (Vector2 5 6)
 
