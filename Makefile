@@ -78,7 +78,9 @@ runtests = \
 		(cmp $(2)/result-`basename $$file .stau`.txt \
 			$(1)/correct-`basename $$file .stau`.txt >/dev/null 2>&1 && \
 				echo "Test `basename $$file .stau` successful") || \
-					echo "Test `basename $$file .stau` failed"; \
+				( echo "Test `basename $$file .stau` failed"; echo Expected:; \
+				cat $(1)/correct-`basename $$file .stau`.txt; echo Found:; \
+				cat $(2)/result-`basename $$file .stau`.txt) \
 	done
 
 runstacktests = \
