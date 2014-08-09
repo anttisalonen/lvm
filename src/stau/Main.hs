@@ -4,7 +4,7 @@ where
 import Data.List
 import qualified Data.Map as M
 import Control.Monad
-import Control.Monad.Error()
+import Control.Monad.Except()
 import System.IO
 import System.Exit
 import System.Environment

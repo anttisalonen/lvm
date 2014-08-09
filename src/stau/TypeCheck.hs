@@ -11,7 +11,7 @@ import qualified Data.Set as S
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State
-import Control.Monad.Error
+import Control.Monad.Except
 
 import Stau
 import StauTypes
