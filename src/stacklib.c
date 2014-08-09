@@ -1175,7 +1175,7 @@ static int add_ffidef(const char *buf, int *pc, int bufsize)
 	}
 	if(i == sizeof(ffiname) - 1) {
 		fprintf(stderr, "Too long FFI name (max length: %zd characters)\n",
-				sizeof(ffiname - 1));
+				sizeof(ffiname) - 1);
 		return 1;
 	}
 
